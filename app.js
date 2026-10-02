@@ -414,6 +414,32 @@ const statsDe = id => club()[id] || null;
 // Nivel con el que se cobra: si está en pausa, se cobra oficial hasta su siguiente pedido.
 const nivelParaCobrar = id => { const e = statsDe(id); return !e ? 'oficial' : (e.pausa ? 'oficial' : e.nivel); };
 
+// Historial de sellos: cada movimiento (compra, amigo referido, historia/reseña, ajuste) con su fecha
+// y el total acumulado después de ese movimiento. También marca los hitos (regalo ganado, pasa a VIP
+// o Leyenda), los regalos usados y los sellos que están por llegar.
+function historialSellos(cid) {
+  const e = statsDe(cid); if (!e) return { filas: [], porLlegar: [] };
+  const mov = [];
+  e.pedidos.filter(daSello).forEach(p => mov.push({ fecha: String(fechaSello(p)).slice(0, 10), n: 1, tipo: 'compra', texto: `Compra · pedido ${p.numero}`, pedido: p.id }));
+  e.amigosLista.filter(a => a.pedido).forEach(a => mov.push({ fecha: String(fechaSello(a.pedido)).slice(0, 10), n: 1, tipo: 'amigo', texto: `Amigo referido: ${nombreCliente(a.cliente)} recibió su pedido ${a.pedido.numero}`, pedido: a.pedido.id, cliente: a.cliente.id }));
+  lista('sellos_extra').filter(x => x.cliente_id === cid).forEach(x => mov.push({ fecha: String(x.fecha).slice(0, 10), n: +x.cantidad || 0, tipo: x.tipo === 'resena' ? 'historia' : 'ajuste',
+    texto: x.tipo === 'resena' ? `${REDES[x.red] || 'Historia o reseña'}${x.nota ? ' · ' + x.nota : ''}` : `Ajuste manual${x.nota ? ': ' + x.nota : ''}`, link: x.link, extra: x.id }));
+  mov.sort((a, b) => a.fecha.localeCompare(b.fecha) || (a.tipo === 'compra' ? -1 : 1));
+  const filas = []; let total = 0; let compras = 0; let nivel = 'oficial';
+  for (const m of mov) {
+    const antes = total; total = Math.max(0, total + m.n); if (m.tipo === 'compra') compras++;
+    filas.push({ ...m, total });
+    if (Math.floor(total / CLUB.regalo_cada) > Math.floor(antes / CLUB.regalo_cada)) filas.push({ fecha: m.fecha, hito: 'regalo', texto: `Llegó a ${Math.floor(total / CLUB.regalo_cada) * CLUB.regalo_cada} sellos: gana 1 mantequilla de regalo`, total });
+    const nv = total >= CLUB.leyenda_sellos ? 'leyenda' : total >= CLUB.vip_sellos && compras >= CLUB.vip_min_compras ? 'vip' : 'oficial';
+    if (nv !== nivel && nv !== 'oficial') filas.push({ fecha: m.fecha, hito: 'nivel', texto: `Pasa a ${NIVELES[nv]}`, total });
+    nivel = nv;
+  }
+  e.pedidos.filter(p => (p.items || []).some(i => i.tipo === 'regalo')).forEach(p => filas.push({ fecha: p.fecha, hito: 'usado', texto: `Usó su regalo en el pedido ${p.numero}`, pedido: p.id }));
+  filas.forEach((f, i) => { f.orden = i; });
+  filas.sort((a, b) => b.fecha.localeCompare(a.fecha) || b.orden - a.orden); // lo más reciente arriba; el hito, sobre el movimiento que lo causó
+  const porLlegar = e.pedidos.filter(p => p.canal !== 'b2b' && tienePack(p) && !daSello(p));
+  return { filas, porLlegar };
+}
 function siguienteMeta(e) {
   const m = [];
   if (e.nivelAuto === 'oficial') {
@@ -1814,11 +1840,24 @@ const CLI = {
             <span style="margin-left:auto">${a.pedido ? `<span class="tag entregado">+1 sello · ${fechaCorta(fechaSello(a.pedido))}</span>` : '<span class="tag pendiente">aún no recibe su pedido</span>'}</span></div>`).join('')
             : `<p class="suave">Aún no refiere a nadie. Su código es <span class="codigo">${h(CF.codigo)}</span>.</p>`}
         </div>
-        <div class="card" style="margin-top:12px"><h3>Historias, reseñas y ajustes</h3>
-          ${extras.length ? extras.map(s => `<div class="fila" style="padding:5px 0;border-bottom:1px solid #f3ecdc"><span>${s.tipo === 'resena' ? `${ic('camara')} ${h(REDES[s.red] || 'Reseña')}` : `${ic('estrella')} Ajuste`} <b>${s.cantidad > 0 ? '+' : ''}${s.cantidad}</b> · ${fechaCorta(s.fecha)}${s.link ? ` · <a href="${h(s.link)}" target="_blank" rel="noopener">ver</a>` : ''}${s.nota ? ` · <small>${h(s.nota)}</small>` : ''}</span>
-            <button class="btn mini peligro" style="margin-left:auto" onclick="CLI.borrarExtra('${s.id}')">Quitar</button></div>`).join('') : '<p class="suave">Sin historias, reseñas ni ajustes.</p>'}
-        </div>
-      </div></div>`;
+      </div></div>
+      ${CLI.tablaSellos()}`;
+  },
+  tablaSellos() {
+    const { filas, porLlegar } = historialSellos(CF.id);
+    const icono = { compra: 'pedidos', amigo: 'amigos', historia: 'camara', ajuste: 'estrella' };
+    const fila = f => f.hito
+      ? `<tr class="hito ${f.hito}"><td>${fechaCorta(f.fecha)}</td><td colspan="2">${ic(f.hito === 'nivel' ? 'corona' : 'regalo')} <b>${h(f.texto)}</b>${f.pedido ? ` · <a href="#" onclick="PF.abrir('${f.pedido}');return false">ver pedido</a>` : ''}</td><td class="cen num">${f.total ?? ''}</td><td></td></tr>`
+      : `<tr><td>${fechaCorta(f.fecha)}</td><td>${ic(icono[f.tipo])} ${h(f.texto)}${f.link ? ` · <a href="${h(f.link)}" target="_blank" rel="noopener">ver</a>` : ''}${f.pedido ? ` · <a href="#" onclick="PF.abrir('${f.pedido}');return false">ver pedido</a>` : ''}</td>
+          <td class="cen num"><b style="color:${f.n < 0 ? 'var(--error)' : 'var(--ok)'}">${f.n > 0 ? '+' : ''}${f.n}</b></td><td class="cen num"><b>${f.total}</b></td>
+          <td class="der">${f.extra ? `<button class="btn mini peligro" onclick="CLI.borrarExtra('${f.extra}')">Quitar</button>` : ''}</td></tr>`;
+    return `<div class="card" style="margin-top:16px"><h3>${ic('club')} Historial de sellos <small class="suave">(${statsDe(CF.id).total} en total)</small></h3>
+      <p class="suave" style="margin-top:-6px">Cada sello con su motivo y el total acumulado. Una compra suma cuando el pedido con pack está pagado y entregado.</p>
+      ${filas.length || porLlegar.length ? `<div class="tabla-wrap"><table class="tabla-sellos"><thead><tr><th>Fecha</th><th>Qué pasó</th><th class="cen">Sellos</th><th class="cen">Total</th><th></th></tr></thead><tbody>
+        ${porLlegar.map(p => `<tr class="por-llegar"><td>${fechaCorta(p.fecha)}</td><td>${ic('reloj')} Por llegar · pedido <a href="#" onclick="PF.abrir('${p.id}');return false">${h(p.numero)}</a> (falta ${[estadoPago(p) !== 'pagado' ? 'pago' : null, p.estado_entrega !== 'entregado' ? 'entrega' : null].filter(Boolean).join(' y ')})</td><td class="cen num">+1</td><td class="cen">—</td><td></td></tr>`).join('')}
+        ${filas.map(fila).join('')}
+      </tbody></table></div>` : '<p class="suave">Todavía no tiene sellos.</p>'}
+    </div>`;
   },
   // Código final: el que escribiste (limpio) o el que se generará al guardar.
   codigoFinal() { return limpiarCodigo(CF.codigo) || generarCodigo(CF.nombre, CF.apellido, CF.id); },

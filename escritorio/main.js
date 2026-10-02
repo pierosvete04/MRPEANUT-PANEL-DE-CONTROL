@@ -38,7 +38,7 @@ function crearVentana() {
   win = new BrowserWindow({
     width: 1400, height: 900, minWidth: 900, minHeight: 600, show: false,
     title: 'Mr. Peanut · Panel de control', backgroundColor: '#FBF6EA', autoHideMenuBar: true,
-    icon: path.join(__dirname, 'icono.png'),
+    icon: path.join(__dirname, 'logo-app.png'),
     webPreferences: { preload: path.join(__dirname, 'preload.js'), contextIsolation: true, sandbox: true, spellcheck: false },
   });
   win.once('ready-to-show', () => { win.maximize(); win.show(); });

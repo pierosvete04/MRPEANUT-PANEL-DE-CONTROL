@@ -29,7 +29,5 @@ try {
 } catch { /* sin git */ }
 fs.writeFileSync(path.join(destino, 'version.json'), JSON.stringify(version, null, 1));
 
-fs.mkdirSync(path.join(__dirname, 'recursos'), { recursive: true });
-fs.copyFileSync(path.join(raiz, 'img', 'icono-512.png'), path.join(__dirname, 'recursos', 'icono.png'));
-fs.copyFileSync(path.join(raiz, 'img', 'icono-512.png'), path.join(__dirname, 'icono.png'));
+// El ícono del programa (logo-app.png / logo-app.ico) sale del logo con personaje de BRANDING y está en esta carpeta.
 console.log(`Panel copiado a build/panel (${version.sha === 'local' ? 'copia local' : version.sha.slice(0, 7)})`);

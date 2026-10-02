@@ -1,7 +1,7 @@
 {
   "name": "mrpeanut-panel",
   "productName": "Mr. Peanut Panel",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Panel de control de Mr. Peanut: pedidos, clientes, Club e inventario.",
   "author": "Mr. Peanut",
   "license": "UNLICENSED",
@@ -25,11 +25,11 @@
     "productName": "Mr. Peanut Panel",
     "copyright": "Mr. Peanut",
     "directories": { "output": "dist", "buildResources": "recursos" },
-    "files": ["main.js", "preload.js", "actualizador.js", "icono.png", "package.json"],
+    "files": ["main.js", "preload.js", "actualizador.js", "logo-app.png", "package.json"],
     "extraResources": [{ "from": "build/panel", "to": "panel" }],
     "win": {
       "target": [{ "target": "nsis", "arch": ["x64"] }],
-      "icon": "recursos/icono.png"
+      "icon": "logo-app.ico"
     },
     "nsis": {
       "oneClick": false,
@@ -39,7 +39,9 @@
       "createStartMenuShortcut": true,
       "shortcutName": "Mr. Peanut Panel",
       "artifactName": "MrPeanut-Panel-Setup-${version}.${ext}",
-      "uninstallDisplayName": "Mr. Peanut Panel"
+      "uninstallDisplayName": "Mr. Peanut Panel",
+      "installerIcon": "logo-app.ico",
+      "uninstallerIcon": "logo-app.ico"
     },
     "publish": [{ "provider": "github", "owner": "pierosvete04", "repo": "MRPEANUT-PANEL-DE-CONTROL", "releaseType": "release" }]
   }
