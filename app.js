@@ -84,7 +84,7 @@ const COLUMNAS = {
   productos: ['id', 'nombre', 'sabor', 'descripcion', 'precio', 'costo', 'disponible', 'en_catalogo', 'imagen_url', 'media', 'orden', 'creado_en', 'updated_at', 'eliminado'],
   packs: ['id', 'nombre', 'frascos', 'tipo', 'max_almendra', 'precio_oficial', 'precio_vip', 'precio_leyenda', 'descripcion', 'activo', 'en_catalogo', 'imagen_url', 'media', 'orden', 'creado_en', 'updated_at', 'eliminado'],
   clientes: ['id', 'tipo_cliente', 'codigo', 'nombre', 'apellido', 'razon_social', 'ruc', 'contacto', 'tipo_negocio', 'celular', 'correo', 'regalo_agendado', 'direccion', 'distrito', 'direccion_envio', 'referencia', 'referido_por', 'nivel_manual', 'notas', 'creado_en', 'updated_at', 'eliminado'],
-  pedidos: ['id', 'numero', 'canal', 'cliente_id', 'fecha', 'fecha_entrega', 'estado_entrega', 'estado_pago', 'anulado', 'modalidad_pago', 'fecha_vencimiento', 'nivel_precio', 'items', 'subtotal', 'descuento', 'descuento_referido', 'descuento_motivo', 'envio', 'envio_asumido', 'costo', 'igv', 'total', 'pagos', 'metodo_pago', 'courier', 'comprobante', 'guia', 'direccion_envio', 'referido_por', 'notas', 'entregado_en', 'creado_en', 'updated_at', 'eliminado'],
+  pedidos: ['id', 'numero', 'canal', 'cliente_id', 'fecha', 'fecha_entrega', 'estado_entrega', 'estado_pago', 'anulado', 'modalidad_pago', 'fecha_vencimiento', 'nivel_precio', 'items', 'subtotal', 'descuento', 'descuento_referido', 'descuento_motivo', 'descuento_pct', 'canje', 'canje_publica', 'canje_cumplido', 'envio', 'envio_asumido', 'costo', 'igv', 'total', 'pagos', 'metodo_pago', 'courier', 'comprobante', 'guia', 'direccion_envio', 'referido_por', 'notas', 'entregado_en', 'creado_en', 'updated_at', 'eliminado'],
   sellos_extra: ['id', 'cliente_id', 'tipo', 'cantidad', 'pedido_id', 'red', 'link', 'nota', 'fecha', 'creado_en', 'updated_at', 'eliminado'],
   movimientos_stock: ['id', 'producto_id', 'tipo', 'cantidad', 'lote', 'fecha', 'vence', 'motivo', 'nota', 'creado_en', 'updated_at', 'eliminado'],
 };
@@ -323,7 +323,7 @@ function estadoPago(p) {
   if (pg >= (+p.total || 0) - 0.009) return 'pagado';
   return pg > 0 ? 'parcial' : 'pendiente';
 }
-const esVenta = p => !p.anulado && !p.eliminado && (pagadoDe(p) > 0 || p.estado_entrega === 'entregado');
+const esVenta = p => !p.anulado && !p.eliminado && !p.canje && (pagadoDe(p) > 0 || p.estado_entrega === 'entregado');
 const vencido = p => p.modalidad_pago === 'credito' && saldoDe(p) > 0 && p.fecha_vencimiento && p.fecha_vencimiento < hoy();
 const metodosDe = p => [...new Set((p.pagos || []).map(x => x.metodo))].join(' + ');
 
@@ -332,8 +332,8 @@ let CACHE = null; let INV = null;
 const invalidar = () => { CACHE = null; INV = null; };
 const tienePack = p => (p.items || []).some(i => i.tipo === 'pack');
 const fechaSello = p => p.entregado_en || p.fecha;
-// Un pedido suma sello cuando es B2C, tiene pack, está pagado y entregado.
-const daSello = p => p.canal !== 'b2b' && !p.anulado && tienePack(p) && estadoPago(p) === 'pagado' && p.estado_entrega === 'entregado';
+// Un pedido suma sello cuando es B2C, tiene pack, está pagado y entregado. El canje (publicidad) no suma.
+const daSello = p => p.canal !== 'b2b' && !p.anulado && !p.canje && tienePack(p) && estadoPago(p) === 'pagado' && p.estado_entrega === 'entregado';
 
 function frascosDe(p) {
   const out = { vendidos: {}, regalo: {} };
@@ -581,6 +581,7 @@ function etiquetarTablas(root) {
 
 // ==================================================================== MENSAJES DE WHATSAPP
 function detalleTexto(p) {
+  if (p.canje) return detalleTexto({ items: p.items }).replace(/ — S\/[\d.,]+/g, '');
   return (p.items || []).map(i => {
     if (i.tipo === 'pack') return `• ${i.nombre}: ${Object.entries(i.sabores || {}).filter(([, n]) => n).map(([k, n]) => `${n} ${nombreSabor(k)}`).join(', ')} — ${soles(i.precio)}`;
     if (i.tipo === 'suelto') return `• ${i.cantidad} ${nombreSabor(i.sabor)} suelto — ${soles(i.cantidad * i.precio_unit)}`;
@@ -592,6 +593,7 @@ function detalleTexto(p) {
 // Etapa del pedido -> mensaje que se sugiere al tocar WhatsApp.
 function faseSugerida(p) {
   if (p.anulado) return 'confirmar';
+  if (p.canje) return { entregado: 'gracias', en_camino: 'en_camino', preparado: 'listo' }[p.estado_entrega] || 'confirmar';
   const sal = saldoDe(p), pg = pagadoDe(p);
   if (p.estado_entrega === 'entregado') return sal > 0 ? 'cobro' : 'gracias';
   if (p.estado_entrega === 'en_camino') return 'en_camino';
@@ -622,7 +624,27 @@ function plantillas(p, c) {
     const e = statsDe(c.id);
     if (e) club = `Llevas *${plural(e.total, 'sello')}* en tu tarjeta Mr. Peanut (${NIVELES[e.nivel]}).\n${e.regalosPend ? `🎁 ¡Ganaste ${e.regalosPend === 1 ? 'una mantequilla' : plural(e.regalosPend, 'mantequilla')} de regalo del sabor que quieras para tu próximo pedido!\n` : `Te ${CLUB.regalo_cada - (e.total % CLUB.regalo_cada) === 1 ? 'falta 1 sello' : `faltan ${CLUB.regalo_cada - (e.total % CLUB.regalo_cada)} sellos`} para tu mantequilla de regalo.\n`}Tu código para amigos: *${c.codigo}* (tu amigo paga S/${CLUB.desc_referido} menos en su primer pack y tú ganas un sello).\n`;
   }
-  const T = {
+  const acuerdo = p.canje_publica ? `
+Lo acordado: ${p.canje_publica}` : '';
+  const T = p.canje ? {
+    confirmar: { t: 'Confirmar canje', x: `${cabeza}
+Te preparamos tu pedido de canje *${p.numero || ''}*:
+${detalleTexto(p)}
+${acuerdo}
+
+Entrega en: ${dir}${cuando}
+¿Nos confirmas que todo está correcto?` },
+    listo: { t: 'Pedido listo', x: `${cabeza}
+¡Tu pedido *${p.numero}* ya está listo! 🥜
+Te lo llevamos a ${dir}${cuando}.
+¿Nos confirmas que estarás para recibirlo?` },
+    en_camino: { t: 'En camino', x: `${cabeza}
+¡Tu pedido *${p.numero}* ya va en camino! 🛵
+${courierTxt}Llega a: ${dir}` },
+    gracias: { t: 'Entregado + recordar publicación', x: `${cabeza}
+Tu pedido *${p.numero}* ya fue entregado ✅ ¡Esperamos que lo disfrutes!${acuerdo}
+No olvides etiquetarnos para compartirlo. ¡Muchas gracias!` },
+  } : {
     confirmar: { t: 'Confirmar pedido', x: `${cabeza}\nRegistramos tu pedido *${p.numero || ''}*:\n${detalleTexto(p)}\n${+p.envio ? `• Envío — ${soles(p.envio)}\n` : ''}\n*Total: ${soles(p.total)}*${b2b ? ' (incluye IGV)' : ''}\n${lineaPago}\n\nEntrega en: ${dir}${cuando}\n¿Nos confirmas que todo está correcto?` },
     pago_recibido: { t: 'Pago recibido', x: `${cabeza}\n¡Gracias! 🙌 Recibimos tu pago de *${soles(pg)}*.\nYa estamos preparando tu pedido *${p.numero}*.${docs ? '\n' + docs : ''}` },
     saldo: { t: 'Falta un saldo', x: `${cabeza}\nRecibimos *${soles(pg)}* de tu pedido *${p.numero}*. Queda un saldo de *${soles(sal)}*.\n${datosPago} ¡Gracias!` },
@@ -782,6 +804,7 @@ function resumenItems(p) {
 }
 function tagPago(p) {
   if (p.anulado) return '<span class="tag anulado">Cancelado</span>';
+  if (p.canje) return `<span class="tag canje">Canje</span><br><small class="${p.canje_cumplido ? '' : 'falta'}">${p.canje_cumplido ? 'ya publicó' : 'falta publicar'}</small>`;
   const ep = estadoPago(p); const sal = saldoDe(p);
   const sub = p.modalidad_pago === 'contra_entrega' ? 'contra entrega' : p.modalidad_pago === 'credito' ? `vence ${fechaCorta(p.fecha_vencimiento)}` : '';
   if (ep === 'pagado') return `<span class="tag entregado">Pagado</span>${metodosDe(p) ? `<br><small>${h(metodosDe(p))}</small>` : ''}`;
@@ -789,6 +812,7 @@ function tagPago(p) {
 }
 function tagDoc(p) {
   if (p.anulado) return '';
+  if (p.canje && !p.comprobante?.numero) return '<small class="suave">canje</small>';
   const c = p.comprobante?.numero ? `<span class="codigo" style="font-size:12px">${h(p.comprobante.numero)}</span>` : `<small class="falta">sin ${p.canal === 'b2b' ? 'comprobante' : 'boleta'}</small>`;
   const g = p.canal === 'b2b' ? (p.guia?.numero ? `<br><small>GR ${h(p.guia.numero)}</small>` : '<br><small class="falta">sin guía</small>') : '';
   return c + g;
@@ -798,7 +822,9 @@ const FILTROS_PED = {
   atender: ['Por atender', p => !p.anulado && (p.estado_entrega !== 'entregado' || saldoDe(p) > 0)],
   cobrar: ['Pendientes de pago', p => !p.anulado && saldoDe(p) > 0],
   entregar: ['Por entregar', p => !p.anulado && p.estado_entrega !== 'entregado'],
-  documento: ['Sin boleta / factura', p => !p.anulado && !p.comprobante?.numero],
+  documento: ['Sin boleta / factura', p => !p.anulado && !p.canje && !p.comprobante?.numero],
+  canjes: ['Canjes (publicidad)', p => !p.anulado && p.canje],
+  canje_pend: ['Canjes que falta publicar', p => !p.anulado && p.canje && !p.canje_cumplido],
   cerrados: ['Entregados y pagados', p => !p.anulado && p.estado_entrega === 'entregado' && saldoDe(p) === 0],
   anulados: ['Cancelados', p => p.anulado],
   todos: ['Todos', () => true],
@@ -822,6 +848,7 @@ function renderPedidos() {
   const vencidos = porCobrar.filter(vencido);
   const porEntregar = delCanal.filter(p => !p.anulado && p.estado_entrega !== 'entregado');
   const deHoy = delCanal.filter(p => p.fecha === hoy());
+  const canjesMes = delCanal.filter(p => !p.anulado && p.canje && p.fecha?.startsWith(mesActual));
   const meses = [...new Set([mesActual, ...todos.map(p => String(p.fecha || '').slice(0, 7)).filter(Boolean)])].sort().reverse();
   let ps = delCanal.filter(FILTROS_PED[f.filtro][1]);
   if (f.mes) ps = ps.filter(p => p.fecha?.startsWith(f.mes));
@@ -843,6 +870,7 @@ function renderPedidos() {
         <em>${plural(delMes.length, 'pedido')}${ingMes ? ` · ganancia <b class="${claseMargen(ganMes / ingMes * 100)}-txt">${soles(ganMes)}</b> (${pct(ganMes / ingMes * 100)})` : ''}</em></div>
       ${kpi('cobrar', 'alerta', 'Por cobrar', soles(porCobrar.reduce((a, p) => a + saldoDe(p), 0)), `${plural(porCobrar.length, 'pedido')}${vencidos.length ? ` · <b style="color:var(--error)">${vencidos.length} vencido${vencidos.length === 1 ? '' : 's'}</b>` : ''}`)}
       ${kpi('entregar', 'camion', 'Por entregar', porEntregar.length, `${porEntregar.filter(p => p.estado_entrega === 'preparado').length} listos · ${porEntregar.filter(p => p.estado_entrega === 'en_camino').length} en camino`)}
+      ${canjesMes.length || f.filtro.startsWith('canje') ? kpi('canjes', 'regalo', `Canjes de ${MESES_L[new Date().getMonth()]}`, soles(-canjesMes.reduce((a, p) => a + rentabilidad(p).ganancia, 0)), `invertido en publicidad · ${plural(canjesMes.length, 'canje')}${canjesMes.some(p => !p.canje_cumplido) ? ` · <b style="color:var(--error)">${canjesMes.filter(p => !p.canje_cumplido).length} sin publicar</b>` : ''}`) : ''}
       <div class="kpi"><small>${ic('calendario')} Pedidos de hoy</small><b class="num">${deHoy.length}</b><em>${fechaLarga(hoy())}${deHoy.length ? ` · ${soles(deHoy.filter(p => !p.anulado).reduce((a, p) => a + (+p.total || 0), 0))}` : ''}</em></div>
     </div>
     <div class="card">
@@ -868,7 +896,7 @@ function renderPedidos() {
               ${p.canal === 'b2b' ? `<small>${h(c?.tipo_negocio || '')}</small>` : `${tagNivel(p.nivel_precio || 'oficial')} ${e?.regalosPend ? `<span class="tag regalo" title="Tiene regalo del Club">${ic('regalo')}</span>` : ''}`}</div></div></td>
             <td class="det">${resumenItems(p)}${p.envio_asumido ? ' <span class="tag gratis">envío gratis</span>' : ''}</td>
             <td class="der num"><b>${soles(p.total)}</b></td>
-            <td class="der num">${p.anulado ? '<small class="suave">—</small>' : `<b class="${claseMargen(R.margen)}-txt" title="Venta ${soles(R.ingreso)} − costo ${soles(R.costo)}${R.courier ? ` − courier ${soles(R.courier)}` : ''}">${soles(R.ganancia)}</b><br><small class="${claseMargen(R.margen)}-txt">${pct(R.margen)} margen</small>`}</td>
+            <td class="der num">${p.anulado ? '<small class="suave">—</small>' : p.canje ? `<b class="m-medio-txt" title="Costo de las mantequillas${R.courier ? ' + courier' : ''}">−${soles(-R.ganancia)}</b><br><small class="suave">publicidad</small>` : `<b class="${claseMargen(R.margen)}-txt" title="Venta ${soles(R.ingreso)} − costo ${soles(R.costo)}${R.courier ? ` − courier ${soles(R.courier)}` : ''}">${soles(R.ganancia)}</b><br><small class="${claseMargen(R.margen)}-txt">${pct(R.margen)} margen</small>`}</td>
             <td>${tagPago(p)}</td>
             <td>${selectEstado(estadoPed(p), `PED.estado('${p.id}',this.value,this)`)}
               ${!p.anulado && p.courier?.empresa ? `<br><small>${h(p.courier.empresa)}${p.courier.conductor ? ' · ' + h(p.courier.conductor) : ''}</small>` : ''}</td>
@@ -973,7 +1001,7 @@ const PF = {
         lineas: (p.items || []).filter(i => i.tipo === 'linea'),
         regalos: (p.items || []).filter(i => i.tipo === 'regalo').map(i => i.sabor),
         _regalosOrig: (p.items || []).filter(i => i.tipo === 'regalo').length,
-        _descRef: +p.descuento_referido > 0, _otroDesc: r2((+p.descuento || 0) - (+p.descuento_referido || 0)), _actDir: false,
+        _descRef: +p.descuento_referido > 0, _descTipo: +p.descuento_pct > 0 ? 'pct' : 'soles', _descValor: +p.descuento_pct > 0 ? +p.descuento_pct : r2((+p.descuento || 0) - (+p.descuento_referido || 0)), _actDir: false,
         pagos: p.pagos || [], courier: { ...courierVacio(), ...(p.courier || {}) },
         comprobante: { tipo: p.canal === 'b2b' ? 'factura' : 'boleta', numero: '', fecha: '', ...(p.comprobante || {}) },
         guia: { numero: '', fecha: '', ...(p.guia || {}) },
@@ -983,7 +1011,7 @@ const PF = {
       const cn = canal || (esEmpresa(cli) ? 'b2b' : 'b2c');
       F = {
         id: null, canal: cn, cliente_id: clienteId || null, _modo: clienteId ? 'sel' : 'buscar', _q: '', _nuevo: clienteVacio(cn === 'b2b' ? 'empresa' : 'persona'), _refQ: '',
-        nivel_precio: 'oficial', packs: [], sueltos, lineas: [], regalos: [], _regalosOrig: 0, envio: 0, envio_asumido: false, _otroDesc: 0, descuento_motivo: '', _descRef: true,
+        nivel_precio: 'oficial', packs: [], sueltos, lineas: [], regalos: [], _regalosOrig: 0, envio: 0, envio_asumido: false, _descTipo: 'soles', _descValor: 0, descuento_motivo: '', canje: false, canje_publica: '', canje_cumplido: false, _descRef: true,
         fecha: hoy(), fecha_entrega: '', direccion_envio: '', notas: '', _actDir: true,
         estado_entrega: 'por_preparar', anulado: false, modalidad_pago: 'anticipado', fecha_vencimiento: '', pagos: [],
         courier: courierVacio(), comprobante: { tipo: cn === 'b2b' ? 'factura' : 'boleta', numero: '', fecha: '' }, guia: { numero: '', fecha: '' },
@@ -1088,7 +1116,7 @@ const PF = {
   esPrimerPedido() {
     if (F._modo === 'nuevo') return true;
     if (F._modo !== 'sel') return false;
-    return !lista('pedidos').some(p => p.cliente_id === F.cliente_id && p.id !== F.id && !p.anulado);
+    return !lista('pedidos').some(p => p.cliente_id === F.cliente_id && p.id !== F.id && !p.anulado && !p.canje);
   },
   referente() {
     if (F.canal === 'b2b') return null;
@@ -1339,13 +1367,16 @@ const PF = {
     const el = $('#pf-pago'); if (!el) return;
     const t = PF.totales(); const pg = pagadoDe(F); const sal = Math.max(0, r2(t.total - pg));
     const mods = F.canal === 'b2b' ? MODALIDAD : { anticipado: MODALIDAD.anticipado, contra_entrega: MODALIDAD.contra_entrega };
-    el.innerHTML = `<div class="seg">${Object.entries(mods).map(([k, x]) => `<button class="${F.modalidad_pago === k ? 'activo' : ''}" onclick="PF.modalidad('${k}')">${x}</button>`).join('')}</div>
+    const canje = `<label class="check canje-check"><input type="checkbox" ${F.canje ? 'checked' : ''} onchange="PF.canje(this.checked)"> <b>Es canje (publicidad)</b> <small class="suave">no se cobra, descuenta stock y no suma sellos</small></label>`;
+    if (F.canje) {
+      el.innerHTML = `${canje}
+        <div class="campo" style="margin-top:10px"><label>¿Qué publica a cambio?</label><textarea rows="2" oninput="F.canje_publica=this.value" placeholder="Ej.: 1 reel + 3 historias etiquetando a @mrpeanut">${h(F.canje_publica || '')}</textarea></div>
+        <label class="check" style="margin-top:8px"><input type="checkbox" ${F.canje_cumplido ? 'checked' : ''} onchange="F.canje_cumplido=this.checked"> Ya lo publicó</label>`;
+      return;
+    }
+    el.innerHTML = `${canje}<div class="seg" style="margin-top:10px">${Object.entries(mods).map(([k, x]) => `<button class="${F.modalidad_pago === k ? 'activo' : ''}" onclick="PF.modalidad('${k}')">${x}</button>`).join('')}</div>
       <p class="suave" style="margin:8px 0 0">${F.modalidad_pago === 'anticipado' ? 'El cliente envía su pago (Yape, Plin, transferencia) antes del envío.' : F.modalidad_pago === 'contra_entrega' ? 'Se cobra al entregar. Registra el pago cuando el cliente o el courier te lo pasen.' : 'La empresa paga después de recibir.'}</p>
       ${F.modalidad_pago === 'credito' ? `<div class="grid g2" style="margin-top:10px"><div class="campo"><label>Vence el</label><input type="date" value="${h(F.fecha_vencimiento)}" onchange="F.fecha_vencimiento=this.value;PF.pintarResumen()"></div></div>` : ''}
-      <div class="grid g2" style="margin-top:12px">
-        <div class="campo"><label>Otro descuento (S/)</label><input type="number" min="0" step="0.5" value="${+F._otroDesc || 0}" oninput="F._otroDesc=+this.value||0;PF.pintarResumen();PF.pintarPagoSaldo()"></div>
-        <div class="campo"><label>Motivo del descuento</label><input type="text" value="${h(F.descuento_motivo || '')}" oninput="F.descuento_motivo=this.value" placeholder="Ej.: cortesía por demora"></div>
-      </div>
       <p style="margin:16px 0 6px"><b>Pagos recibidos</b> <span id="pf-saldo">${PF.textoSaldo(t.total, pg)}</span></p>
       ${F.pagos.length ? `<table><thead><tr><th>Fecha</th><th>Método</th><th>Referencia</th><th class="der">Monto</th><th>Voucher</th><th></th></tr></thead><tbody>
         ${F.pagos.map((x, i) => `<tr><td>${fechaCorta(x.fecha)}</td><td>${h(x.metodo)}</td><td>${h(x.referencia || '')}</td><td class="der num">${soles(x.monto)}</td>
@@ -1359,6 +1390,11 @@ const PF = {
         <div class="campo"><label id="pg-foto-lbl">Voucher *</label><input type="file" id="pg-foto" accept="image/*"></div>
         <button class="btn oscuro" onclick="PF.agregarPago()">＋ Registrar pago</button>
       </div>`;
+  },
+  canje(v) {
+    if (v && F.pagos.length && !confirm('Este pedido tiene pagos registrados. ¿Marcarlo como canje igual? (los pagos se quedan, quítalos si no corresponden)')) return PF.pintarPago();
+    F.canje = v; if (v) { F.envio_asumido = true; F.envio = 0; }
+    PF.pintarPago(); PF.pintarEntrega?.(); PF.pintarResumen();
   },
   textoSaldo(total, pg) {
     const sal = Math.max(0, r2(total - pg));
@@ -1398,9 +1434,14 @@ const PF = {
   },
 
   totales() {
+    if (F.canje) {
+      const subtotal = F.canal === 'b2b' ? r2(F.lineas.reduce((a, l) => a + (+l.cantidad || 0) * (+l.precio_unit || 0), 0))
+        : r2(F.packs.reduce((a, it) => a + (+it.precio || 0), 0) + SABORES.reduce((a, s) => a + (F.sueltos[s.id] || 0) * precioSuelto(s.id), 0));
+      return { subtotal, ref: 0, otro: 0, descuento: subtotal, canje: subtotal, elegibleRef: false, envio: 0, total: 0, igv: 0 };
+    }
     if (F.canal === 'b2b') {
       const subtotal = r2(F.lineas.reduce((a, l) => a + (+l.cantidad || 0) * (+l.precio_unit || 0), 0));
-      const otro = Math.max(0, +F._otroDesc || 0);
+      const otro = PF.descExtra(subtotal);
       const descuento = r2(Math.min(subtotal, otro));
       const envio = F.envio_asumido ? 0 : +F.envio || 0;
       const gravado = subtotal - descuento + envio;
@@ -1411,10 +1452,35 @@ const PF = {
     const subtotal = r2(packs + sueltos);
     const elegibleRef = !!PF.referente() && PF.esPrimerPedido() && F.packs.length > 0;
     const ref = elegibleRef && F._descRef ? Math.min(CLUB.desc_referido, subtotal) : 0;
-    const otro = Math.max(0, +F._otroDesc || 0);
+    const otro = PF.descExtra(subtotal - ref);
     const descuento = r2(Math.min(subtotal, ref + otro));
     const envio = F.envio_asumido ? 0 : +F.envio || 0;
     return { subtotal, ref, otro, descuento, elegibleRef, envio, total: r2(subtotal - descuento + envio), igv: 0 };
+  },
+
+  // Descuento extra del resumen: en soles o en % sobre lo que queda tras el descuento referido.
+  descExtra(base) {
+    const v = Math.max(0, +F._descValor || 0);
+    return F._descTipo === 'pct' ? r2(Math.max(0, base) * Math.min(v, 100) / 100) : r2(v);
+  },
+  descTipo(t) { F._descTipo = t; if (t === 'pct' && +F._descValor > 100) F._descValor = 0; PF.pintarResumen(); PF.focoDesc(); },
+  descValor(inp) {
+    const pos = inp.selectionStart; const v = inp.value.replace(',', '.');
+    F._descValor = Math.max(0, parseFloat(v) || 0); F._descTxt = v;
+    PF.pintarResumen(); PF.focoDesc(pos);
+  },
+  focoDesc(pos) {
+    const i = $('#pf-desc-val'); if (!i) return;
+    i.focus(); const n = pos ?? i.value.length; try { i.setSelectionRange(n, n); } catch {}
+  },
+  bloqueDescuento(t) {
+    const pct = F._descTipo === 'pct';
+    const txt = F._descTxt != null && (parseFloat(String(F._descTxt)) || 0) === (+F._descValor || 0) ? F._descTxt : (+F._descValor || '');
+    return `<div class="fila-r desc-ctl"><span>Descuento</span>
+        <span class="desc-in"><span class="seg mini"><button type="button" class="${pct ? '' : 'activo'}" onclick="PF.descTipo('soles')">S/</button><button type="button" class="${pct ? 'activo' : ''}" onclick="PF.descTipo('pct')">%</button></span>
+        <input id="pf-desc-val" type="text" inputmode="decimal" placeholder="0" value="${h(String(txt))}" oninput="PF.descValor(this)">
+        <b class="num">${t.otro ? '−' + soles(t.otro) : ''}</b></span></div>
+      ${+F._descValor > 0 ? `<input class="desc-motivo" type="text" value="${h(F.descuento_motivo || '')}" oninput="F.descuento_motivo=this.value" placeholder="Motivo del descuento (ej.: cortesía por demora)">` : ''}`;
   },
 
   pintarResumen() {
@@ -1439,13 +1505,13 @@ const PF = {
       <hr class="sep" style="margin:8px 0">
       <div class="fila-r"><span>Subtotal</span><b class="num">${soles(t.subtotal)}</b></div>
       ${t.elegibleRef ? `<div class="fila-r"><label class="check" style="font-weight:700"><input type="checkbox" ${F._descRef ? 'checked' : ''} onchange="F._descRef=this.checked;PF.pintarResumen()"> Descuento referido (1.er pack)</label><b class="num">−${soles(CLUB.desc_referido)}</b></div>` : ''}
-      ${t.otro ? `<div class="fila-r"><span>Otro descuento</span><b class="num">−${soles(t.otro)}</b></div>` : ''}
+      ${F.canje ? `<div class="fila-r"><span>${ic('regalo')} Canje (publicidad)</span><b class="num">−${soles(t.canje)}</b></div>` : PF.bloqueDescuento(t)}
       ${t.envio ? `<div class="fila-r"><span>Envío</span><b class="num">${soles(t.envio)}</b></div>` : F.envio_asumido ? `<div class="fila-r"><span>Envío</span><b class="num" style="color:var(--ok)">Gratis</b></div>` : ''}
       <div class="fila-r total"><span>Total</span><span class="num">${soles(t.total)}</span></div>
       ${b2b ? `<div class="fila-r"><small>Op. gravada</small><small class="num">${soles(t.total - t.igv)}</small></div><div class="fila-r"><small>IGV 18%</small><small class="num">${soles(t.igv)}</small></div>` : ''}
-      <div class="fila-r" style="margin-top:6px"><span>Pagado</span><b class="num">${soles(pg)}</b></div>
-      <div class="fila-r"><span>${F.modalidad_pago === 'credito' && F.fecha_vencimiento ? `Saldo (vence ${fechaCorta(F.fecha_vencimiento)})` : 'Saldo'}</span><b class="num" style="color:${sal > 0 ? 'var(--error)' : 'var(--ok)'}">${soles(sal)}</b></div>
-      ${sellos}
+      ${F.canje ? '' : `<div class="fila-r" style="margin-top:6px"><span>Pagado</span><b class="num">${soles(pg)}</b></div>
+      <div class="fila-r"><span>${F.modalidad_pago === 'credito' && F.fecha_vencimiento ? `Saldo (vence ${fechaCorta(F.fecha_vencimiento)})` : 'Saldo'}</span><b class="num" style="color:${sal > 0 ? 'var(--error)' : 'var(--ok)'}">${soles(sal)}</b></div>`}
+      ${F.canje ? `<div class="aviso alerta" style="margin-top:12px">Canje: no suma sellos del Club.</div>` : sellos}
       ${PF.bloqueMargen(t)}
       ${F.id && inventario().asign[F.id]?.length ? `<p class="suave" style="margin:10px 0 0;font-size:13px"><b>Lotes:</b> ${inventario().asign[F.id].map(a => `${a.n} ${h(nombreSabor(D.productos.get(a.prod)?.sabor))} (${h(a.lote)})`).join(' · ')}</p>` : ''}
       ${avisos.length ? `<div class="lista-avisos" style="margin-top:10px">${avisos.map(a => `<div class="aviso ${a[0]}">${a[1]}</div>`).join('')}</div>` : ''}
@@ -1462,15 +1528,15 @@ const PF = {
     const fila = (a, b, cls = '') => `<div class="fila-r ${cls}"><span>${a}</span><b class="num">${b}</b></div>`;
     const ancho = Math.max(0, Math.min(100, R.margen));
     return `<div class="rentab">
-      <div class="rentab-cab"><b>${ic('dinero')} Rentabilidad</b><span class="margen-pill ${claseMargen(R.margen)}">margen ${pct(R.margen)}</span></div>
+      <div class="rentab-cab"><b>${ic('dinero')} Rentabilidad</b>${F.canje ? '<span class="margen-pill m-medio">canje</span>' : `<span class="margen-pill ${claseMargen(R.margen)}">margen ${pct(R.margen)}</span>`}</div>
       <div class="margen-riel"><span class="${claseMargen(R.margen)}" style="width:${ancho}%"></span><i style="left:${MARGEN_MINIMO}%" title="Mínimo ${MARGEN_MINIMO}%"></i></div>
-      ${!b2b && descLista > 0 ? fila(`Precio de lista <small>(${plural(R.frascos - F.regalos.length, 'frasco')} sueltos)</small>`, soles(R.lista)) + fila('Ahorro por pack / nivel', '−' + soles(descLista), 'rojo') : ''}
-      ${t.descuento ? fila(t.ref && t.otro ? 'Descuentos (referido + otro)' : t.ref ? 'Descuento referido' : 'Otro descuento', '−' + soles(t.descuento), 'rojo') : ''}
+      ${!b2b && !F.canje && descLista > 0 ? fila(`Precio de lista <small>(${plural(R.frascos - F.regalos.length, 'frasco')} sueltos)</small>`, soles(R.lista)) + fila('Ahorro por pack / nivel', '−' + soles(descLista), 'rojo') : ''}
+      ${t.canje ? fila('Canje (no se cobra)', '−' + soles(t.canje), 'rojo') : t.descuento ? fila(t.ref && t.otro ? 'Descuentos (referido + otro)' : t.ref ? 'Descuento referido' : F._descTipo === 'pct' ? `Descuento ${+F._descValor}%` : 'Descuento', '−' + soles(t.descuento), 'rojo') : ''}
       ${fila(b2b ? 'Venta de productos sin IGV' : 'Venta de productos', soles(R.ventaProd))}
       ${fila('Costo de mantequillas', '−' + soles(R.costoProd), 'rojo')}
       ${R.costoRegalo ? fila('Regalos del Club (costo)', '−' + soles(R.costoRegalo), 'rojo') : ''}
       ${R.envio || R.courier ? fila(`Delivery <small>(cobras ${soles(R.envio)} · pagas ${soles(R.courier)})</small>`, (R.deliveryNeto < 0 ? '−' : '+') + soles(Math.abs(R.deliveryNeto)), R.deliveryNeto < 0 ? 'rojo' : '') : ''}
-      <div class="fila-r ganancia"><span>Ganancia</span><b class="num">${soles(R.ganancia)}</b></div>
+      <div class="fila-r ganancia"><span>${F.canje ? 'Inversión en publicidad' : 'Ganancia'}</span><b class="num">${F.canje ? soles(-R.ganancia) : soles(R.ganancia)}</b></div>
       ${R.margen < MARGEN_MINIMO && R.ingreso > 0 ? `<small class="${R.margen < 30 ? 'falta' : 'suave'}">Margen por debajo del ${MARGEN_MINIMO}% que pide el centro de costos.</small>` : ''}
       ${b2b && F.lineas.some(l => !l.producto_id && l.nombre.trim() && !(+l.costo_unit > 0)) ? `<small class="suave">Las líneas “Otro producto” sin costo cuentan como S/0: escribe su costo para ver el margen real.</small>` : ''}
     </div>`;
@@ -1509,6 +1575,7 @@ const PF = {
     const p = PF.pedidoVirtual(); const T = plantillas(p, c);
     const sug = faseSugerida(p);
     if (!F._waClave || !F._waEdit) F._waClave = F._waClave && F._waEdit ? F._waClave : (F._waFijada || sug);
+    if (!T[F._waClave]) { F._waClave = sug; F._waFijada = null; F._waEdit = false; }
     const clave = F._waClave;
     const txt = F._waEdit && F._waTxt != null ? F._waTxt : T[clave].x;
     el.innerHTML = `<h3>WhatsApp</h3>
@@ -1526,7 +1593,7 @@ const PF = {
     const editado = F._waEdit ? $('#pf-wa-txt').value : null; const clave = F._waClave;
     const rec = await PF.guardar({ quedarse: true }); if (!rec) return;
     const c = D.clientes.get(rec.cliente_id);
-    abrirWhatsApp(c.celular, editado ?? plantillas(rec, c)[clave || faseSugerida(rec)].x);
+    abrirWhatsApp(c.celular, editado ?? (plantillas(rec, c)[clave] || plantillas(rec, c)[faseSugerida(rec)]).x);
   },
 
   items() {
@@ -1612,7 +1679,7 @@ const PF = {
       id: F.id || uid(), numero: F.numero || nuevoNumero(F.fecha, F.canal), canal: F.canal, cliente_id: cid, fecha: F.fecha, fecha_entrega: F.fecha_entrega || null,
       estado_entrega: F.estado_entrega, anulado: !!F.anulado, modalidad_pago: F.modalidad_pago, fecha_vencimiento: F.modalidad_pago === 'credito' ? F.fecha_vencimiento : null,
       nivel_precio: b2b ? null : F.nivel_precio, items: PF.items(), subtotal: t.subtotal, descuento: t.descuento, descuento_referido: t.ref,
-      descuento_motivo: F.descuento_motivo || '', envio: t.envio, envio_asumido: !!F.envio_asumido, igv: t.igv, total: t.total, pagos,
+      descuento_motivo: t.otro ? F.descuento_motivo || '' : '', descuento_pct: t.otro && F._descTipo === 'pct' ? +F._descValor : 0, canje: !!F.canje, canje_publica: F.canje ? String(F.canje_publica || '').trim() : '', canje_cumplido: !!(F.canje && F.canje_cumplido), envio: t.envio, envio_asumido: !!F.envio_asumido, igv: t.igv, total: t.total, pagos,
       courier: (() => { const { _otro, _otroTxt, ...cour } = F.courier; return Object.values(cour).some(v => String(v || '').trim()) ? cour : null; })(),
       comprobante: F.comprobante.numero ? { ...F.comprobante } : null,
       guia: b2b && F.guia.numero ? { ...F.guia } : null,
@@ -2769,7 +2836,7 @@ async function subirVouchers() {
 const NO_NULOS = {
   _todas: { eliminado: false },
   clientes: { tipo_cliente: 'persona', regalo_agendado: false, nombre: '' },
-  pedidos: { canal: 'b2c', estado_entrega: 'por_preparar', estado_pago: 'pendiente', anulado: false, envio_asumido: false, items: [], pagos: [] },
+  pedidos: { canal: 'b2c', estado_entrega: 'por_preparar', estado_pago: 'pendiente', anulado: false, envio_asumido: false, descuento_pct: 0, canje: false, canje_cumplido: false, items: [], pagos: [] },
   productos: { precio: 0, disponible: true, en_catalogo: true, nombre: '', media: [] },
   packs: { tipo: 'mixto', max_almendra: 1, activo: true, en_catalogo: true, frascos: 1, nombre: '', media: [] },
   sellos_extra: { cantidad: 1, tipo: 'ajuste' },
@@ -3221,7 +3288,7 @@ const BOT = {
       for (const k of ['conductor', 'celular', 'placa', 'costo']) if (c[k] != null) PF.cour(k, String(c[k]));
     }
     if (o.envioGratis) PF.asumeEnvio(true); else if (o.envio) F.envio = o.envio;
-    if (o.descuento) { F._otroDesc = o.descuento; F.descuento_motivo = o.motivo || ''; }
+    if (o.descuento) { F._descTipo = 'soles'; F._descValor = o.descuento; F.descuento_motivo = o.motivo || ''; }
     F.fecha_entrega = o.fechaEntrega || '';
     F.notas = 'Pedido de prueba (simulador)';
     PF.pintarEntrega(); PF.pintarPago(); PF.pintarResumen();

@@ -156,6 +156,10 @@ alter table public.pedidos drop column if exists estado;
 alter table public.productos add column if not exists costo numeric(10,2);
 alter table public.pedidos add column if not exists costo numeric(10,2);
 alter table public.pedidos add column if not exists envio_asumido boolean not null default false;
+alter table public.pedidos add column if not exists descuento_pct numeric(5,2) not null default 0;
+alter table public.pedidos add column if not exists canje boolean not null default false;
+alter table public.pedidos add column if not exists canje_publica text;
+alter table public.pedidos add column if not exists canje_cumplido boolean not null default false;
 alter table public.sellos_extra add column if not exists red text;
 alter table public.sellos_extra add column if not exists link text;
 alter table public.productos add column if not exists media jsonb not null default '[]';  -- galería: fotos y videos para Meta
