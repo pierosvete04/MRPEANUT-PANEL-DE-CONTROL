@@ -418,6 +418,14 @@ tr.anulada td { opacity: .55; }
 
 /* Estado del pedido (lista en la cabecera del pedido y en la tabla) */
 .sel-pago { max-width: 190px; }
+.ventana-pago { border: 2px solid var(--negro); border-radius: 18px; padding: 22px; width: min(520px, calc(100vw - 32px)); box-shadow: 6px 6px 0 var(--negro); }
+.ventana-pago::backdrop { background: rgba(0,0,0,.45); }
+.ventana-pago h3 { margin: 0 0 4px; font-size: 22px; }
+.vp-zona { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; min-height: 90px; border: 2px dashed #c9bfa8; border-radius: 14px; padding: 12px; cursor: pointer; font-weight: 800; color: var(--suave); text-align: center; }
+.vp-zona:hover { border-color: var(--naranja); color: var(--naranja); }
+.vp-zona img { max-height: 220px; max-width: 100%; border-radius: 10px; }
+.vp-error { color: var(--error); font-weight: 700; margin: 10px 0 0; }
+.vp-botones { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; }
 .sel-pago.p-pendiente, .sel-pago.p-parcial { background: var(--alerta-bg); color: var(--alerta); }
 .sel-pago.p-vencido { background: var(--error-bg, #fde4e1); color: var(--error); }
 .sel-pago.p-pagado { background: var(--ok-bg); color: var(--ok); }

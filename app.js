@@ -622,7 +622,7 @@ function faseSugerida(p) {
 function plantillas(p, c) {
   const b2b = p.canal === 'b2b';
   const nombre = saludo(c) || '';
-  const dir = p.direccion_envio || c?.direccion_envio || c?.direccion || '';
+  const dir = p.direccion_envio || c?.direccion_envio || c?.direccion || 'la dirección que nos indiques';
   const sal = saldoDe(p); const pg = pagadoDe(p);
   const datosPago = CFG.datos_pago ? `Puedes pagar por ${CFG.datos_pago}.` : 'Puedes pagar por Yape o Plin.';
   const cuando = p.fecha_entrega ? ` el ${fechaLarga(p.fecha_entrega)}` : '';
@@ -1113,14 +1113,13 @@ const PED = {
       if (!confirm(`¿Volver ${p.numero} a pendiente de pago? Se quitan los pagos registrados (${soles(pagadoDe(p))}).`)) return reponer();
       p.pagos = [];
     } else {
-      const sal = saldoDe(p); if (!(sal > 0)) return reponer();
-      const x = { id: uid(), fecha: hoy(), monto: sal, metodo: valor, referencia: '', tiene_foto: false };
-      if (pideVoucher(p.modalidad_pago, valor)) {
-        const file = await elegirImagen();
-        if (!file) { toast(`Para marcarlo pagado con ${valor} adjunta la captura del voucher.`, 4500); return reponer(); }
-        await guardarFotoPago(x, file);
-      }
+      if (!(saldoDe(p) > 0)) return reponer();
+      const r = await ventanaPago(p, valor);
+      if (!r) return reponer();
+      const x = { id: uid(), fecha: r.fecha, monto: r.monto, metodo: r.metodo, referencia: r.referencia, tiene_foto: false };
+      if (r.file) await guardarFotoPago(x, r.file);
       p.pagos = [...(p.pagos || []), x];
+      valor = r.metodo;
     }
     p.estado_pago = estadoPago(p); p.metodo_pago = metodosDe(p);
     await guardar('pedidos', p);
@@ -1135,13 +1134,44 @@ const PED = {
   },
 };
 
-// Abre el selector de archivos y devuelve la imagen elegida (o null si cancela).
-function elegirImagen() {
+// Ventana para confirmar un pago desde la lista: monto, método, n.° de operación y voucher.
+// El voucher es obligatorio si pideVoucher(); si no, es opcional. Devuelve los datos o null si cancela.
+function ventanaPago(p, metodo) {
   return new Promise(res => {
-    const inp = document.createElement('input'); inp.type = 'file'; inp.accept = 'image/*';
-    inp.onchange = () => res(inp.files?.[0] || null);
-    inp.addEventListener('cancel', () => res(null));
-    inp.click();
+    const c = D.clientes.get(p.cliente_id); const sal = saldoDe(p);
+    const dlg = document.createElement('dialog'); dlg.className = 'ventana-pago';
+    dlg.innerHTML = `<form method="dialog">
+      <h3>Confirmar pago</h3>
+      <p class="suave" style="margin:0 0 12px">${h(p.numero)} · ${h(nombreCliente(c))} · ${MODALIDAD[p.modalidad_pago] || ''}</p>
+      <div class="grid g2">
+        <div class="campo"><label>Monto (S/)</label><input type="number" name="monto" min="0" step="0.1" value="${sal}"></div>
+        <div class="campo"><label>Método</label><select name="metodo">${METODOS.map(m => `<option ${m === metodo ? 'selected' : ''}>${m}</option>`).join('')}</select></div>
+        <div class="campo"><label>Fecha</label><input type="date" name="fecha" value="${hoy()}"></div>
+        <div class="campo"><label>N.° de operación</label><input type="text" name="ref" placeholder="opcional"></div>
+      </div>
+      <div class="campo" style="margin-top:12px"><label class="vp-lbl"></label>
+        <label class="vp-zona"><input type="file" name="foto" accept="image/*" hidden><img alt="" hidden><span>${ic('mas-circ')} Subir la captura del voucher</span></label></div>
+      <p class="vp-error" hidden></p>
+      <div class="vp-botones"><button type="button" class="btn" value="no">Cancelar</button><button type="submit" class="btn prim">Marcar como pagado</button></div>
+    </form>`;
+    document.body.appendChild(dlg);
+    const $d = q => dlg.querySelector(q); const f = $d('form');
+    const pide = () => pideVoucher(p.modalidad_pago, f.metodo.value);
+    const etiqueta = () => { $d('.vp-lbl').textContent = pide() ? 'Voucher * (obligatorio para corroborar el pago)' : 'Voucher (opcional)'; };
+    etiqueta(); f.metodo.onchange = etiqueta;
+    f.foto.onchange = () => { const file = f.foto.files?.[0]; if (!file) return; const img = $d('.vp-zona img'); img.src = URL.createObjectURL(file); img.hidden = false; $d('.vp-zona span').textContent = 'Cambiar imagen'; $d('.vp-error').hidden = true; };
+    let resultado = null;
+    const cerrar = () => { dlg.close(); };
+    $d('button[value=no]').onclick = cerrar;
+    f.onsubmit = e => {
+      const monto = r2(f.monto.value); const file = f.foto.files?.[0] || null; const err = $d('.vp-error');
+      const falta = !(monto > 0) ? 'Escribe el monto del pago.' : pide() && !file ? `Adjunta la captura del voucher (${f.metodo.value}). Solo el efectivo y el contra entrega van sin voucher.` : '';
+      if (falta) { e.preventDefault(); err.textContent = falta; err.hidden = false; return; }
+      if (monto > sal + 0.009 && !confirm(`El monto (${soles(monto)}) supera lo que falta pagar (${soles(sal)}). ¿Registrarlo igual?`)) { e.preventDefault(); return; }
+      resultado = { monto, metodo: f.metodo.value, fecha: f.fecha.value || hoy(), referencia: f.ref.value.trim(), file };
+    };
+    dlg.addEventListener('close', () => { dlg.remove(); res(resultado); });
+    dlg.showModal();
   });
 }
 
@@ -1352,7 +1382,7 @@ const PF = {
       if (F._q) PF.buscar(F._q);
     } else if (F._modo === 'nuevo') {
       const n = F._nuevo;
-      const envio = `<div class="campo" style="grid-column:1/-1"><label>Dirección de envío *</label>
+      const envio = `<div class="campo" style="grid-column:1/-1"><label>Dirección de envío</label>
             <label class="check" style="font-weight:600"><input type="checkbox" ${n._mismaDir ? 'checked' : ''} onchange="F._nuevo._mismaDir=this.checked;if(this.checked){F._nuevo.direccion_envio=F._nuevo.direccion;}PF.pintarCliente()"> Es la misma dirección</label>
             <input type="text" id="pf-n-envio" value="${h(n.direccion_envio)}" oninput="PF.setN('direccion_envio',this.value)" ${n._mismaDir ? 'disabled' : ''}></div>`;
       el.innerHTML = `<div class="aviso info" style="margin-bottom:12px">${b2b ? 'Empresa nueva' : 'Cliente nuevo'}: se guarda en <b>Clientes</b> junto con el pedido. <a href="#" onclick="PF.cambiar();return false">Buscar uno existente</a></div>
@@ -1364,7 +1394,7 @@ const PF = {
           ${inp('nombre', 'Nombre *')}${inp('apellido', 'Apellido *')}${inp('celular', 'Celular *', 'inputmode="tel" placeholder="9 dígitos"')}`}
           <div class="campo"><label>Distrito *</label>${selectDistrito(n.distrito, "PF.setN('distrito',this.value)")}</div>
           <div class="campo"><label>Correo</label><input type="email" value="${h(n.correo)}" oninput="PF.setN('correo',this.value)" placeholder="nombre@correo.com" autocomplete="off"></div>
-          ${inp('direccion', 'Dirección *', '', true)}${envio}${inp('referencia', 'Referencia de la dirección', 'placeholder="Ej.: frente al parque"', true)}
+          ${inp('direccion', 'Dirección', 'placeholder="opcional"', true)}${envio}${inp('referencia', 'Referencia de la dirección', 'placeholder="Ej.: frente al parque"', true)}
         </div><div id="pf-dup"></div>${bloqueRef()}`;
       PF.setN('celular', n.celular);
     } else {
@@ -1377,8 +1407,8 @@ const PF = {
 </div>
           ${F.id ? '' : `<button class="btn mini" onclick="PF.cambiar()">Cambiar</button>`}
         </div>
-        <div class="campo" style="margin-top:12px"><label>Dirección de envío de este pedido *</label>
-          <input type="text" value="${h(F.direccion_envio)}" oninput="F.direccion_envio=this.value"></div>
+        <div class="campo" style="margin-top:12px"><label>Dirección de envío de este pedido</label>
+          <input type="text" value="${h(F.direccion_envio)}" placeholder="opcional" oninput="F.direccion_envio=this.value"></div>
         ${F.id ? '' : `<label class="check" style="margin-top:6px;font-weight:600"><input type="checkbox" ${F._actDir ? 'checked' : ''} onchange="F._actDir=this.checked"> Guardarla también en la ficha del cliente</label>`}
         ${bloqueRef()}`;
       el.insertAdjacentHTML('afterbegin', PF.avisosCliente(c, e));
@@ -1812,10 +1842,7 @@ const PF = {
       else if (clientePorCelular(n.celular)) err.push('Ese celular ya está registrado: usa el cliente existente.');
       if (!n.distrito) err.push('Elige el distrito.');
       if (n.correo.trim() && !esCorreo(n.correo)) err.push('El correo no es válido.');
-      if (!n.direccion.trim()) err.push('Falta la dirección.');
-      if (!(n._mismaDir ? n.direccion : n.direccion_envio).trim()) err.push('Falta la dirección de envío.');
     }
-    if (F._modo === 'sel' && !String(F.direccion_envio || '').trim()) err.push('Falta la dirección de envío.');
     if (b2b) {
       const ls = PF.items();
       if (!ls.length) err.push('El pedido no tiene productos.');
@@ -2200,8 +2227,7 @@ Díctalo cuando hagas tu pedido por WhatsApp y pagas S/${CLUB.desc_referido} men
       if (CLUB.resena_requiere_pedido && !peds.length) { el.innerHTML = `<div class="aviso alerta" style="margin-top:10px">No tiene pedidos entregados sin historia/reseña (1 por pedido).</div>`; return; }
       el.innerHTML = `<div class="aviso info" style="margin-top:10px"><div class="grid g2">
         <div class="campo"><label>¿Dónde la publicó?</label><select id="cf-red">${Object.entries(REDES).map(([k, t]) => `<option value="${k}">${t}</option>`).join('')}</select></div>
-        <div class="campo"><label>Pedido ${CLUB.resena_requiere_pedido ? '*' : '(opcional)'}</label><select id="cf-ped">${CLUB.resena_requiere_pedido ? '' : '<option value="">—</option>'}${peds.map(p => `<option value="${p.id}">${h(p.numero)} · ${fechaCorta(p.fecha)}</option>`).join('')}</select></div>
-        <div class="campo" style="grid-column:1/-1"><label>Link o nota (ej. @usuario, captura guardada)</label><input type="text" id="cf-link"></div></div>
+        <div class="campo"><label>Pedido ${CLUB.resena_requiere_pedido ? '*' : '(opcional)'}</label><select id="cf-ped">${CLUB.resena_requiere_pedido ? '' : '<option value="">—</option>'}${peds.map(p => `<option value="${p.id}">${h(p.numero)} · ${fechaCorta(p.fecha)}</option>`).join('')}</select></div></div>
         <button class="btn prim mini" style="margin-top:8px" onclick="CLI.guardarResena()">Sumar +1 sello</button></div>`;
     } else {
       el.innerHTML = `<div class="aviso info" style="margin-top:10px">
@@ -2211,7 +2237,7 @@ Díctalo cuando hagas tu pedido por WhatsApp y pagas S/${CLUB.desc_referido} men
     }
   },
   async guardarResena() {
-    const link = $('#cf-link').value.trim();
+    const link = '';
     const err = await registrarResena(CF.id, { red: $('#cf-red').value, pedido_id: $('#cf-ped').value || null, link: /^https?:/.test(link) ? link : '', nota: /^https?:/.test(link) ? '' : link });
     if (err) return toast(err, 4500);
     CLI.abrir(CF.id);
@@ -2487,11 +2513,10 @@ function renderClub() {
     cuerpo = `
     <div class="card" style="margin-bottom:16px"><h3>${ic('camara')} Registrar historia o reseña</h3>
       <p class="suave" style="margin-top:-6px">Cuando un cliente sube una historia o reseña hablando del producto, la registras aquí y se le suma 1 sello${CLUB.resenas_mes ? ` (máximo ${CLUB.resenas_mes} por mes)` : ''}.</p>
-      <div class="grid g4" style="align-items:end">
+      <div class="grid g3" style="align-items:end">
         <div class="campo"><label>Cliente</label><select id="hs-cli" onchange="CLUBV.pedidos()"><option value="">Elige…</option>${[...cs].sort((a, b) => nombreCliente(a).localeCompare(nombreCliente(b))).map(c => `<option value="${c.id}">${h(nombreCliente(c))} · ${h(c.celular)}</option>`).join('')}</select></div>
         <div class="campo"><label>Dónde la publicó</label><select id="hs-red">${Object.entries(REDES).map(([k, t]) => `<option value="${k}">${t}</option>`).join('')}</select></div>
         <div class="campo"><label>Pedido ${CLUB.resena_requiere_pedido ? '*' : '(opcional)'}</label><select id="hs-ped"><option value="">— elige un cliente —</option></select></div>
-        <div class="campo"><label>Link o nota</label><input type="text" id="hs-link" placeholder="https://… o @usuario"></div>
       </div>
       <div class="fila" style="margin-top:10px"><button class="btn prim" onclick="CLUBV.registrar()">Sumar +1 sello</button><span id="hs-msg"></span></div>
     </div>
@@ -2520,7 +2545,7 @@ const CLUBV = {
   },
   async registrar() {
     const cid = $('#hs-cli').value; if (!cid) return toast('Elige el cliente.');
-    const link = $('#hs-link').value.trim();
+    const link = '';
     const err = await registrarResena(cid, { red: $('#hs-red').value, pedido_id: $('#hs-ped').value || null, link: /^https?:/.test(link) ? link : '', nota: /^https?:/.test(link) ? '' : link });
     if (err) { $('#hs-msg').innerHTML = `<span class="aviso alerta">${h(err)}</span>`; return; }
     renderClub();
