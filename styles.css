@@ -417,6 +417,10 @@ tr.anulada td { opacity: .55; }
 }
 
 /* Estado del pedido (lista en la cabecera del pedido y en la tabla) */
+.sel-pago { max-width: 190px; }
+.sel-pago.p-pendiente, .sel-pago.p-parcial { background: var(--alerta-bg); color: var(--alerta); }
+.sel-pago.p-vencido { background: var(--error-bg, #fde4e1); color: var(--error); }
+.sel-pago.p-pagado { background: var(--ok-bg); color: var(--ok); }
 .sel-estado.e-cancelado { background: var(--error-bg, #fde4e1); color: var(--error); }
 .estado-cab { margin-left: auto; display: flex; align-items: center; gap: 8px; }
 .estado-cab label { font-weight: 800; font-size: 14px; }

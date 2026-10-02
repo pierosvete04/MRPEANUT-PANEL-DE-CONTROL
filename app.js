@@ -28,6 +28,7 @@ const METODOS = ['Yape', 'Plin', 'Transferencia', 'Efectivo', 'Tarjeta'];
 const NEGOCIOS = ['Tienda / bodega', 'Restaurante', 'Cafetería', 'Gimnasio', 'Distribuidor', 'Otro'];
 const REDES = { ig_historia: 'Historia de Instagram', ig_post: 'Post de Instagram', tiktok: 'TikTok', google: 'Reseña en Google', facebook: 'Facebook', otro: 'Otro' };
 const COURIERS_BASE = ['InDriver', 'Uber', 'Entrega propia'];
+const COURIER_DUENO = 'Lo lleva el dueño';   // courier.propio = true: envío gratis sin costo de courier
 const DISTRITOS = {
   'Lima Metropolitana': ['Ancón', 'Ate', 'Barranco', 'Breña', 'Carabayllo', 'Chaclacayo', 'Chorrillos', 'Cieneguilla', 'Comas', 'El Agustino', 'Independencia', 'Jesús María',
     'La Molina', 'La Victoria', 'Lima (Cercado)', 'Lince', 'Los Olivos', 'Lurigancho-Chosica', 'Lurín', 'Magdalena del Mar', 'Miraflores', 'Pachacámac', 'Pucusana', 'Pueblo Libre',
@@ -326,6 +327,15 @@ function estadoPago(p) {
 const esVenta = p => !p.anulado && !p.eliminado && !p.canje && (pagadoDe(p) > 0 || p.estado_entrega === 'entregado');
 const vencido = p => p.modalidad_pago === 'credito' && saldoDe(p) > 0 && p.fecha_vencimiento && p.fecha_vencimiento < hoy();
 const metodosDe = p => [...new Set((p.pagos || []).map(x => x.metodo))].join(' + ');
+// El voucher es obligatorio cuando el cliente paga antes (o a crédito) con Yape, Plin, transferencia o tarjeta.
+// En contra entrega y en efectivo es opcional.
+const pideVoucher = (modalidad, metodo) => modalidad !== 'contra_entrega' && metodo !== 'Efectivo';
+async function guardarFotoPago(x, file) {
+  const blob = await redimensionar(file, 1400);
+  await idb.put('imagenes', { clave: `pagos/${x.id}`, blob });
+  IMG[`pagos/${x.id}`] = URL.createObjectURL(blob);
+  x.tiene_foto = true; x._foto_pendiente = true;
+}
 
 // ------------------------------------------------------------------ Club: sellos, niveles y regalos
 let CACHE = null; let INV = null;
@@ -623,12 +633,16 @@ function plantillas(p, c) {
   const lineaPago = p.modalidad_pago === 'contra_entrega' ? `Pagas *${soles(p.total)}* al recibir tu pedido.`
     : p.modalidad_pago === 'credito' ? `Crédito: vence el ${fechaCorta(p.fecha_vencimiento)}.` : `${datosPago} Envíanos la captura y lo preparamos.`;
   const cour = p.courier || {};
-  const courierTxt = cour.conductor || cour.empresa ? `Lo lleva ${[cour.conductor, cour.empresa && `(${cour.empresa}${cour.placa ? ', placa ' + cour.placa : ''})`].filter(Boolean).join(' ')}${cour.celular ? ` · cel. ${cour.celular}` : ''}.\n${cour.seguimiento ? `Síguelo aquí: ${cour.seguimiento}\n` : ''}` : '';
+  const courierTxt = cour.propio ? 'Te lo llevamos nosotros mismos 🥜\n' : cour.conductor || cour.empresa ? `Lo lleva ${[cour.conductor, cour.empresa && `(${cour.empresa}${cour.placa ? ', placa ' + cour.placa : ''})`].filter(Boolean).join(' ')}${cour.celular ? ` · cel. ${cour.celular}` : ''}.\n${cour.seguimiento ? `Síguelo aquí: ${cour.seguimiento}\n` : ''}` : '';
   let club = '';
+  // Recordatorio del código de referido (solo personas con código).
+  const refTxt = !b2b && c?.codigo && !esEmpresa(c)
+    ? `🎟️ Recuerda que tienes tu código de referido *${c.codigo}*: compártelo con tus amigos (pagan S/${CLUB.desc_referido} menos en su primer pack) y con eso consigues más sellos. ¡Cada ${CLUB.regalo_cada} sellos te ganas una mantequilla de regalo! 🎁\n` : '';
   if (!b2b && c && !esEmpresa(c) && D.clientes.get(c.id)) {
     const e = statsDe(c.id);
-    if (e) club = `Llevas *${plural(e.total, 'sello')}* en tu tarjeta Mr. Peanut (${NIVELES[e.nivel]}).\n${e.regalosPend ? `🎁 ¡Ganaste ${e.regalosPend === 1 ? 'una mantequilla' : plural(e.regalosPend, 'mantequilla')} de regalo del sabor que quieras para tu próximo pedido!\n` : `Te ${CLUB.regalo_cada - (e.total % CLUB.regalo_cada) === 1 ? 'falta 1 sello' : `faltan ${CLUB.regalo_cada - (e.total % CLUB.regalo_cada)} sellos`} para tu mantequilla de regalo.\n`}Tu código para amigos: *${c.codigo}* (tu amigo paga S/${CLUB.desc_referido} menos en su primer pack y tú ganas un sello).\n`;
+    if (e) club = `Llevas *${plural(e.total, 'sello')}* en tu tarjeta Mr. Peanut (${NIVELES[e.nivel]}).\n${e.regalosPend ? `🎁 ¡Ganaste ${e.regalosPend === 1 ? 'una mantequilla' : plural(e.regalosPend, 'mantequilla')} de regalo del sabor que quieras para tu próximo pedido!\n` : `Te ${CLUB.regalo_cada - (e.total % CLUB.regalo_cada) === 1 ? 'falta 1 sello' : `faltan ${CLUB.regalo_cada - (e.total % CLUB.regalo_cada)} sellos`} para tu mantequilla de regalo.\n`}`;
   }
+  club += refTxt;
   const acuerdo = p.canje_publica ? `
 Lo acordado: ${p.canje_publica}` : '';
   const T = p.canje ? {
@@ -650,8 +664,8 @@ ${courierTxt}Llega a: ${dir}` },
 Tu pedido *${p.numero}* ya fue entregado ✅ ¡Esperamos que lo disfrutes!${acuerdo}
 No olvides etiquetarnos para compartirlo. ¡Muchas gracias!` },
   } : {
-    confirmar: { t: 'Confirmar pedido', x: `${cabeza}\nRegistramos tu pedido *${p.numero || ''}*:\n${detalleTexto(p)}\n${+p.envio ? `• Envío — ${soles(p.envio)}\n` : ''}\n*Total: ${soles(p.total)}*${b2b ? ' (incluye IGV)' : ''}\n${lineaPago}\n\nEntrega en: ${dir}${cuando}\n¿Nos confirmas que todo está correcto?` },
-    pago_recibido: { t: 'Pago recibido', x: `${cabeza}\n¡Gracias! 🙌 Recibimos tu pago de *${soles(pg)}*.\nYa estamos preparando tu pedido *${p.numero}*.${docs ? '\n' + docs : ''}` },
+    confirmar: { t: 'Confirmar pedido', x: `${cabeza}\nRegistramos tu pedido *${p.numero || ''}*:\n${detalleTexto(p)}\n${+p.envio ? `• Envío — ${soles(p.envio)}\n` : ''}\n*Total: ${soles(p.total)}*${b2b ? ' (incluye IGV)' : ''}\n${lineaPago}\n\nEntrega en: ${dir}${cuando}\n${refTxt ? '\n' + refTxt + '\n' : ''}¿Nos confirmas que todo está correcto?` },
+    pago_recibido: { t: 'Pago recibido', x: `${cabeza}\n¡Gracias! 🙌 Recibimos tu pago de *${soles(pg)}*.\nYa estamos preparando tu pedido *${p.numero}*.${docs ? '\n' + docs : ''}${refTxt ? '\n\n' + refTxt : ''}` },
     saldo: { t: 'Falta un saldo', x: `${cabeza}\nRecibimos *${soles(pg)}* de tu pedido *${p.numero}*. Queda un saldo de *${soles(sal)}*.\n${datosPago} ¡Gracias!` },
     listo: { t: 'Pedido listo', x: `${cabeza}\n¡Tu pedido *${p.numero}* ya está listo! 🥜\nTe lo llevamos a ${dir}${cuando}.\n${cobroCE}¿Nos confirmas que estarás para recibirlo?` },
     en_camino: { t: 'En camino', x: `${cabeza}\n¡Tu pedido *${p.numero}* ya va en camino! 🛵\n${courierTxt}Llega a: ${dir}\n${cobroCE}` },
@@ -938,6 +952,18 @@ function tagPago(p) {
   if (ep === 'pagado') return `<span class="tag entregado">Pagado</span>${metodosDe(p) ? `<br><small>${h(metodosDe(p))}</small>` : ''}`;
   return `<span class="tag ${vencido(p) ? 'anulado' : ep === 'parcial' ? 'parcial' : 'pendiente'}">${vencido(p) ? 'Vencido' : ep === 'parcial' ? 'Parcial' : 'Pendiente'} · ${soles(sal)}</span>${sub ? `<br><small>${sub}</small>` : ''}`;
 }
+// Columna Pago de la lista: una lista para marcarlo pagado (con el método) o volverlo a pendiente sin abrir el pedido.
+function celdaPago(p) {
+  if (p.anulado || p.canje || !(+p.total > 0)) return tagPago(p);
+  const ep = estadoPago(p); const sal = saldoDe(p);
+  const sub = p.modalidad_pago === 'contra_entrega' ? 'contra entrega' : p.modalidad_pago === 'credito' ? `vence ${fechaCorta(p.fecha_vencimiento)}` : '';
+  const clase = ep === 'pagado' ? 'pagado' : vencido(p) ? 'vencido' : ep;
+  const actual = ep === 'pagado' ? `Pagado${metodosDe(p) ? ' · ' + metodosDe(p) : ''}` : `${vencido(p) ? 'Vencido' : ep === 'parcial' ? 'Parcial' : 'Pendiente'} · ${soles(sal)}`;
+  const opts = ep === 'pagado' ? [['pendiente', 'Volver a pendiente']]
+    : METODOS.map(m => [m, `Pagado con ${m}${pideVoucher(p.modalidad_pago, m) ? ' (voucher)' : ''}`]);
+  return `<select class="sel-estado sel-pago p-${clase}" onclick="event.stopPropagation()" onchange="PED.pago('${p.id}',this.value,this)" aria-label="Pago del pedido" title="${ep === 'pagado' ? '' : 'Elige cómo te pagó para marcarlo como pagado'}">
+      <option value="" selected>${h(actual)}</option>${opts.map(([v, t]) => `<option value="${h(v)}">${h(t)}</option>`).join('')}</select>${sub ? `<br><small>${sub}</small>` : ''}`;
+}
 function tagDoc(p) {
   if (p.anulado) return '';
   if (p.canje && !p.comprobante?.numero) return '<small class="suave">canje</small>';
@@ -1022,10 +1048,10 @@ function renderPedidos() {
               <br><small>${fechaCorta(p.fecha)}${p.fecha_entrega ? ` · entrega ${fechaCorta(p.fecha_entrega)}` : ''}</small></td>
             <td><div class="cli-celda">${avatar(c, e?.nivel)}<div><b>${h(nombreCliente(c))}</b>${esPrueba('pedidos', p.id) ? ' <span class="tag prueba">prueba</span>' : ''}<br>
               ${p.canal === 'b2b' ? `<small>${h(c?.tipo_negocio || '')}</small>` : `${tagNivel(p.nivel_precio || 'oficial')} ${e?.regalosPend ? `<span class="tag regalo" title="Tiene regalo del Club">${ic('regalo')}</span>` : ''}`}</div></div></td>
-            <td class="det">${resumenItems(p)}${p.envio_asumido ? ' <span class="tag gratis">envío gratis</span>' : ''}</td>
+            <td class="det">${resumenItems(p)}${p.envio_asumido ? ` <span class="tag gratis">${p.courier?.propio ? 'lo lleva el dueño' : 'envío gratis'}</span>` : ''}</td>
             <td class="der num"><b>${soles(p.total)}</b></td>
             <td class="der num">${p.anulado ? '<small class="suave">—</small>' : p.canje ? `<b class="m-medio-txt" title="Costo de las mantequillas${R.courier ? ' + courier' : ''}">−${soles(-R.ganancia)}</b><br><small class="suave">publicidad</small>` : `<b class="${claseMargen(R.margen)}-txt" title="Venta ${soles(R.ingreso)} − costo ${soles(R.costo)}${R.courier ? ` − courier ${soles(R.courier)}` : ''}">${soles(R.ganancia)}</b><br><small class="${claseMargen(R.margen)}-txt">${pct(R.margen)} margen</small>`}</td>
-            <td>${tagPago(p)}</td>
+            <td>${celdaPago(p)}</td>
             <td>${selectEstado(estadoPed(p), `PED.estado('${p.id}',this.value,this)`)}
               ${!p.anulado && p.courier?.empresa ? `<br><small>${h(p.courier.empresa)}${p.courier.conductor ? ' · ' + h(p.courier.conductor) : ''}</small>` : ''}</td>
             <td>${tagDoc(p)}</td>
@@ -1056,7 +1082,7 @@ async function aplicarEstado(p, nuevo, { preguntar = true } = {}) {
   p.estado_pago = estadoPago(p);
   await guardar('pedidos', p);
   anunciarSnaps(snaps);
-  if (nuevo === 'entregado' && saldoDe(p) > 0) toast(`Entregado, pero falta cobrar ${soles(saldoDe(p))}.`, 4500);
+  if (nuevo === 'entregado' && saldoDe(p) > 0) toast(`Entregado, pero falta cobrar ${soles(saldoDe(p))}. Cuando te pague, márcalo en la columna Pago.`, 5000);
   else toast(`${p.numero}: ${ESTADO_PED[nuevo]}.`);
   return true;
 }
@@ -1077,12 +1103,47 @@ const PED = {
     if (!ok && sel) sel.value = estadoPed(D.pedidos.get(id));
     render();
   },
+  // Marca el pedido como pagado (registra el saldo con el método elegido) o lo vuelve a pendiente (quita los pagos).
+  // Si es "paga antes" con Yape, Plin, transferencia o tarjeta, pide la captura del voucher.
+  async pago(id, valor, sel) {
+    const p = D.pedidos.get(id); if (!p || !valor) return;
+    const reponer = () => { if (sel) sel.value = ''; };
+    const snaps = snapshotClub(p);
+    if (valor === 'pendiente') {
+      if (!confirm(`¿Volver ${p.numero} a pendiente de pago? Se quitan los pagos registrados (${soles(pagadoDe(p))}).`)) return reponer();
+      p.pagos = [];
+    } else {
+      const sal = saldoDe(p); if (!(sal > 0)) return reponer();
+      const x = { id: uid(), fecha: hoy(), monto: sal, metodo: valor, referencia: '', tiene_foto: false };
+      if (pideVoucher(p.modalidad_pago, valor)) {
+        const file = await elegirImagen();
+        if (!file) { toast(`Para marcarlo pagado con ${valor} adjunta la captura del voucher.`, 4500); return reponer(); }
+        await guardarFotoPago(x, file);
+      }
+      p.pagos = [...(p.pagos || []), x];
+    }
+    p.estado_pago = estadoPago(p); p.metodo_pago = metodosDe(p);
+    await guardar('pedidos', p);
+    toast(valor === 'pendiente' ? `${p.numero}: pendiente de pago.` : `${p.numero}: pagado con ${valor}${p.estado_entrega === 'entregado' ? '' : ' · falta entregarlo'}.`);
+    anunciarSnaps(snaps);
+    render();
+  },
   async eliminar(id) { if (await eliminarPedido(D.pedidos.get(id))) render(); },
   whatsapp(id) {
     const p = D.pedidos.get(id); const c = D.clientes.get(p.cliente_id);
     abrirWhatsApp(c?.celular, plantillas(p, c)[faseSugerida(p)].x);
   },
 };
+
+// Abre el selector de archivos y devuelve la imagen elegida (o null si cancela).
+function elegirImagen() {
+  return new Promise(res => {
+    const inp = document.createElement('input'); inp.type = 'file'; inp.accept = 'image/*';
+    inp.onchange = () => res(inp.files?.[0] || null);
+    inp.addEventListener('cancel', () => res(null));
+    inp.click();
+  });
+}
 
 // Guarda los sellos antes de un cambio para avisar después qué ganó cada uno.
 function snapshotClub(p) {
@@ -1448,9 +1509,14 @@ const PF = {
     if (!couriers().some(x => norm(x) === norm(n))) { CFG.couriers = [...couriers(), n]; await guardarConfig(); }
     F.courier._otro = false; F.courier.empresa = n; PF.pintarEntrega(); toast(`${n} quedó en la lista de couriers.`);
   },
+  // v: false = paga el cliente · true = Mr. Peanut paga al courier · 'dueno' = lo lleva el dueño (no hay courier que pagar)
   asumeEnvio(v) {
-    F.envio_asumido = v;
-    if (v) { F._envioAntes = F.envio; F.envio = 0; } else if (!F.envio) F.envio = +F._envioAntes || +F.courier.costo || 0;
+    const dueno = v === 'dueno'; const eraDueno = !!F.courier.propio;
+    if (!F.envio_asumido && v) F._envioAntes = F.envio;
+    F.envio_asumido = !!v;
+    if (v) F.envio = 0; else if (!F.envio) F.envio = +F._envioAntes || +F.courier.costo || 0;
+    if (dueno) F.courier = { ...courierVacio(), propio: true, empresa: COURIER_DUENO, costo: 0 };
+    else if (eraDueno) F.courier = courierVacio();
     PF.pintarEntrega(); PF.pintarResumen(); PF.pintarPago();
   },
   pintarEntrega() {
@@ -1463,15 +1529,15 @@ const PF = {
         <div class="campo" style="grid-column:1/-1"><label>Notas de entrega</label><input type="text" value="${h(F.notas || '')}" oninput="F.notas=this.value" placeholder="Ej.: dejar en portería"></div>
       </div>
       <div class="caja-delivery">
-        <div class="campo"><label>¿Quién paga el delivery?</label><div class="seg"><button class="${!F.envio_asumido ? 'activo' : ''}" onclick="PF.asumeEnvio(false)">${ic('clientes')} El cliente</button><button class="${F.envio_asumido ? 'activo' : ''}" onclick="PF.asumeEnvio(true)">${ic('regalo')} Mr. Peanut (envío gratis)</button></div></div>
-        <div class="grid g2" style="margin-top:10px">
+        <div class="campo"><label>¿Quién paga el delivery?</label><div class="seg"><button class="${!F.envio_asumido ? 'activo' : ''}" onclick="PF.asumeEnvio(false)">${ic('clientes')} El cliente</button><button class="${F.envio_asumido && !c.propio ? 'activo' : ''}" onclick="PF.asumeEnvio(true)">${ic('regalo')} Mr. Peanut (envío gratis)</button><button class="${c.propio ? 'activo' : ''}" onclick="PF.asumeEnvio('dueno')">${ic('camion')} Lo lleva el dueño</button></div></div>
+        ${c.propio ? `<small class="suave" style="display:block;margin-top:8px">El dueño lo lleva: el cliente no paga envío y no se paga courier, así que no resta de tu ganancia.</small></div>` : `<div class="grid g2" style="margin-top:10px">
           <div class="campo"><label>Lo que pagas al courier (S/)</label><input type="number" min="0" step="0.5" value="${h(c.costo)}" placeholder="0" oninput="PF.cour('costo',this.value)"></div>
           ${F.envio_asumido ? `<div class="campo"><label>Envío cobrado al cliente</label><input type="text" value="S/0 · envío gratis" disabled></div>`
             : `<div class="campo"><label>Envío cobrado al cliente (S/)</label><input type="number" min="0" step="0.5" value="${+F.envio || 0}" oninput="F.envio=+this.value||0;PF.pintarResumen();PF.pintarPagoSaldo()"></div>`}
         </div>
         <small class="suave">${F.envio_asumido ? 'El costo del courier sale de tu ganancia: lo ves en <b>Rentabilidad</b>.' : 'Si cobras menos de lo que pagas al courier, la diferencia sale de tu ganancia.'}</small>
-      </div>
-      <p style="margin:14px 0 6px"><b>Courier</b> <small class="suave">opcional · la lista se edita en Sincronización</small></p>
+      </div>`}
+      ${c.propio ? '' : `<p style="margin:14px 0 6px"><b>Courier</b> <small class="suave">opcional · la lista se edita en Sincronización</small></p>
       <div class="grid g3">
         <div class="campo"><label>Empresa</label><select onchange="PF.cour('empresa',this.value)"><option value="">—</option>${lista_.map(x => `<option ${!c._otro && c.empresa === x ? 'selected' : ''}>${h(x)}</option>`).join('')}<option value="__otro" ${c._otro ? 'selected' : ''}>Otro…</option></select>
           ${c._otro ? `<input type="text" id="pf-cour-otro" style="margin-top:6px" placeholder="Nombre del courier" value="${h(c.empresa)}" oninput="PF.courOtro(this.value)">
@@ -1480,7 +1546,7 @@ const PF = {
         <div class="campo"><label>Celular del conductor</label><input type="tel" value="${h(c.celular)}" oninput="PF.cour('celular',this.value)"></div>
         <div class="campo"><label>Placa</label><input type="text" value="${h(c.placa)}" oninput="PF.cour('placa',this.value.toUpperCase())"></div>
         <div class="campo"><label>Link o código de seguimiento</label><input type="text" value="${h(c.seguimiento)}" oninput="PF.cour('seguimiento',this.value)"></div>
-      </div>`;
+      </div>`}`;
     PF.pintarWA();
   },
 
@@ -1513,9 +1579,9 @@ const PF = {
       <div class="pago-nuevo">
         <div class="campo"><label>Fecha</label><input type="date" id="pg-fecha" value="${hoy()}"></div>
         <div class="campo"><label>Monto (S/)</label><input type="number" id="pg-monto" min="0" step="0.1" value="${sal || ''}"></div>
-        <div class="campo"><label>Método</label><select id="pg-metodo" onchange="document.getElementById('pg-foto-lbl').textContent=this.value==='Efectivo'?'Voucher (opcional)':'Voucher *'">${METODOS.map(m => `<option>${m}</option>`).join('')}</select></div>
+        <div class="campo"><label>Método</label><select id="pg-metodo" onchange="document.getElementById('pg-foto-lbl').textContent=PF.etiquetaVoucher(this.value)">${METODOS.map(m => `<option>${m}</option>`).join('')}</select></div>
         <div class="campo"><label>N.° de operación</label><input type="text" id="pg-ref" placeholder="opcional"></div>
-        <div class="campo"><label id="pg-foto-lbl">Voucher *</label><input type="file" id="pg-foto" accept="image/*"></div>
+        <div class="campo"><label id="pg-foto-lbl">${PF.etiquetaVoucher(METODOS[0])}</label><input type="file" id="pg-foto" accept="image/*" onchange="if(this.files.length)PF.agregarPago()" title="Al adjuntar el voucher, el pago queda registrado"></div>
         <button class="btn oscuro" onclick="PF.agregarPago()">＋ Registrar pago</button>
       </div>`;
   },
@@ -1528,18 +1594,14 @@ const PF = {
     const sal = Math.max(0, r2(total - pg));
     return sal <= 0 && total > 0 ? '<span class="tag entregado">Pagado completo</span>' : pg > 0 ? `<span class="tag parcial">Pagó ${soles(pg)} · falta ${soles(sal)}</span>` : `<span class="tag pendiente">Falta ${soles(sal)}</span>`;
   },
+  etiquetaVoucher: metodo => pideVoucher(F.modalidad_pago, metodo) ? 'Voucher * (al adjuntarlo queda pagado)' : 'Voucher (opcional)',
   pintarPagoSaldo() { const el = $('#pf-saldo'); if (el) el.innerHTML = PF.textoSaldo(PF.totales().total, pagadoDe(F)); },
   async agregarPago() {
     const monto = r2($('#pg-monto').value); const metodo = $('#pg-metodo').value; const file = $('#pg-foto').files?.[0];
     if (!(monto > 0)) return toast('Escribe el monto del pago.');
-    if (metodo !== 'Efectivo' && !file) return toast(`Adjunta la captura del voucher (${metodo}). Solo el efectivo va sin voucher.`, 4500);
+    if (pideVoucher(F.modalidad_pago, metodo) && !file) return toast(`Adjunta la captura del voucher (${metodo}). Solo el efectivo y el contra entrega van sin voucher.`, 4500);
     const x = { id: uid(), fecha: $('#pg-fecha').value || hoy(), monto, metodo, referencia: $('#pg-ref').value.trim(), tiene_foto: !!file };
-    if (file) {
-      const blob = await redimensionar(file, 1400);
-      await idb.put('imagenes', { clave: `pagos/${x.id}`, blob });
-      IMG[`pagos/${x.id}`] = URL.createObjectURL(blob);
-      x._foto_pendiente = true;
-    }
+    if (file) await guardarFotoPago(x, file);
     F.pagos.push(x);
     if (pagadoDe(F) > PF.totales().total + 0.009) toast('Ojo: lo pagado supera el total del pedido.', 4500);
     PF.pintarPago(); PF.pintarResumen();
