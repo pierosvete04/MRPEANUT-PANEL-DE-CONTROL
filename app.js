@@ -480,16 +480,20 @@ const limpiarCodigo = v => norm(v).toUpperCase().replace(/\s+/g, '-').replace(/[
 // Los clientes de prueba ya borrados no reservan su código (PEANUT-ANDREA queda libre para uno real).
 const reservaCodigo = c => !(c.eliminado && fuePrueba('clientes', c.id));
 const codigoUsado = (cod, excluirId) => [...D.clientes.values()].some(c => c.id !== excluirId && reservaCodigo(c) && c.codigo && c.codigo === cod);
-function generarCodigo(nombre, apellido, excluirId) {
+// Variantes libres en orden de preferencia: PEANUT-JUANJO → PEANUT-JUANJOB → PEANUT-JUANJO-BUSTAMANTE
+// → PEANUT-JUANJOCARLOS (segundo nombre) → PEANUT-JUANJO2, 3…
+function opcionesCodigo(nombre, apellido, excluirId, max = 4) {
   const usados = new Set([...D.clientes.values()].filter(c => c.id !== excluirId && reservaCodigo(c)).map(c => c.codigo));
   const limpio = s => norm(s).toUpperCase().replace(/[^A-Z0-9 ]/g, '').trim();
-  const base = 'PEANUT-' + (limpio(nombre).split(/\s+/)[0] || 'AMIGO');
-  if (!usados.has(base)) return base;
-  const b2 = base + (limpio(apellido)[0] || '');
-  if (b2 !== base && !usados.has(b2)) return b2;
-  let n = 2; while (usados.has(base + n)) n++;
-  return base + n;
+  const [n1, n2] = limpio(nombre).split(/\s+/); const a1 = limpio(apellido).split(/\s+/)[0] || '';
+  const base = 'PEANUT-' + (n1 || 'AMIGO');
+  const cands = [base, a1 && base + a1[0], a1 && (base + '-' + a1).length <= 24 && base + '-' + a1, n2 && base + n2];
+  for (let n = 2; n < 100; n++) cands.push(base + n);
+  return [...new Set(cands.filter(Boolean))].filter(c => !usados.has(c)).slice(0, max);
 }
+const generarCodigo = (nombre, apellido, excluirId) => opcionesCodigo(nombre, apellido, excluirId, 1)[0];
+// Quién tiene ya un código (para explicar por qué el nuevo varía).
+const duenoCodigo = (cod, excluirId) => [...D.clientes.values()].find(c => c.id !== excluirId && reservaCodigo(c) && c.codigo === cod);
 function buscarClientes(q, limite = 8, tipo = null) {
   const t = norm(q); const d = soloDigitos(q);
   if (!t) return [];
@@ -1945,31 +1949,44 @@ const CLI = {
     const emp = esEmpresa(CF); const id = CF.id;
     const e = nuevo ? null : statsDe(id);
     const ref = CF.referido_por ? D.clientes.get(CF.referido_por) : null;
-    const campo = (k, t, tipo = 'text', full = false) => `<div class="campo" ${full ? 'style="grid-column:1/-1"' : ''}><label>${t}</label><input type="${tipo}" value="${h(CF[k] || '')}" oninput="CF['${k}']=this.value${k === 'nombre' || k === 'apellido' ? ';CLI.prevCod()' : ''}"></div>`;
-    const datos = `<div class="card">
-        ${nuevo ? `<div class="chips" style="margin-bottom:12px"><button class="chip ${!emp ? 'activo' : ''}" onclick="CF.tipo_cliente='persona';CLI.pintar(true)">Persona</button><button class="chip ${emp ? 'activo' : ''}" onclick="CF.tipo_cliente='empresa';CLI.pintar(true)">Empresa</button></div>` : ''}
-        <div class="grid g2">${emp ? `
-          ${campo('nombre', 'Nombre comercial *')}${campo('razon_social', 'Razón social')}${campo('ruc', 'RUC')}
+    const campo = (k, t, tipo = 'text', extra = '') => `<div class="campo"><label>${t}</label><input type="${tipo}" value="${h(CF[k] || '')}" oninput="CF['${k}']=this.value${k === 'nombre' || k === 'apellido' ? ';CLI.prevCod()' : ''}" ${extra}></div>`;
+    const tieneDir = !!(String(CF.direccion || '').trim() || String(CF.referencia || '').trim() || !CF._mismaDir);
+    const verDir = CF._verDir ?? tieneDir;
+    const verMas = CF._verMas ?? !!(CF.nivel_manual || String(CF.notas || '').trim());
+    const resumenDir = String(CF.direccion || '').trim() ? h(CF.direccion) : 'Sin dirección todavía';
+    const datos = `<div class="card form-cli">
+        ${nuevo ? `<div class="chips" style="margin-bottom:14px"><button class="chip ${!emp ? 'activo' : ''}" onclick="CF.tipo_cliente='persona';CLI.pintar(true)">Persona</button><button class="chip ${emp ? 'activo' : ''}" onclick="CF.tipo_cliente='empresa';CLI.pintar(true)">Empresa</button></div>` : ''}
+        <div class="grid g-auto">${emp ? `
+          ${campo('nombre', 'Nombre comercial *')}${campo('razon_social', 'Razón social')}${campo('ruc', 'RUC', 'text', 'inputmode="numeric" maxlength="11"')}
           <div class="campo"><label>Tipo de negocio *</label><select onchange="CF.tipo_negocio=this.value"><option value="">Elige…</option>${NEGOCIOS.map(x => `<option ${CF.tipo_negocio === x ? 'selected' : ''}>${x}</option>`).join('')}</select></div>
-          ${campo('contacto', 'Persona de contacto *')}${campo('celular', 'Celular *', 'tel')}` : `
-          ${campo('nombre', 'Nombre *')}${campo('apellido', 'Apellido *')}${campo('celular', 'Celular *', 'tel')}`}
+          ${campo('contacto', 'Persona de contacto *')}${campo('celular', 'Celular *', 'tel', 'inputmode="tel" placeholder="9 dígitos"')}` : `
+          ${campo('nombre', 'Nombre *')}${campo('apellido', 'Apellido *')}${campo('celular', 'Celular *', 'tel', 'inputmode="tel" placeholder="9 dígitos"')}`}
           <div class="campo"><label>Distrito *</label>${selectDistrito(CF.distrito, 'CF.distrito=this.value')}</div>
-          <div class="campo"><label>Correo</label><input type="email" value="${h(CF.correo || '')}" oninput="CF.correo=this.value" placeholder="nombre@correo.com"></div>
-          <div class="campo" style="grid-column:1/-1"><label>Dirección *</label><input type="text" value="${h(CF.direccion || '')}" oninput="CF.direccion=this.value;if(CF._mismaDir){CF.direccion_envio=this.value;}"></div>
-          <div class="campo" style="grid-column:1/-1"><label>Dirección de envío</label>
-            <label class="check" style="font-weight:600"><input type="checkbox" ${CF._mismaDir ? 'checked' : ''} onchange="CF._mismaDir=this.checked;if(this.checked){CF.direccion_envio=CF.direccion;}CLI.pintar(${nuevo})"> Es la misma dirección</label>
-            ${CF._mismaDir ? '' : `<input type="text" value="${h(CF.direccion_envio || '')}" oninput="CF.direccion_envio=this.value" placeholder="Dirección donde se entregan los pedidos">`}</div>
-          ${campo('referencia', 'Referencia', 'text', true)}
-          ${emp ? '' : CLI.campoReferido()}
-          ${emp ? '' : `<div class="campo"><label>Código de referido ${nuevo ? '<small class="suave">(se crea solo con el nombre)</small>' : ''}</label>
-            <div class="cod-campo"><input type="text" id="cf-cod" value="${h(CF.codigo)}" placeholder="${h(CLI.codigoFinal())}" autocomplete="off" spellcheck="false"
-              oninput="CF.codigo=this.value;CLI.prevCod()"><button type="button" class="btn mini" title="Copiar código" onclick="copiar(CLI.codigoFinal())">${ic('copiar')} Copiar</button></div>
-            <small class="suave" id="cf-cod-info">${CLI.infoCodigo()}</small></div>
-          <div class="campo"><label>Nivel</label><select onchange="CF.nivel_manual=this.value||null">
-            <option value="">Automático por sellos${e ? ` (${NIVELES[e.nivelAuto]})` : ''}</option>
-            ${Object.entries(NIVELES).map(([k, t]) => `<option value="${k}" ${CF.nivel_manual === k ? 'selected' : ''}>Fijar: ${t}</option>`).join('')}</select></div>`}
-          <div class="campo" style="grid-column:1/-1"><label>Notas</label><textarea oninput="CF.notas=this.value">${h(CF.notas || '')}</textarea></div>
+          <div class="campo"><label>Correo <small class="suave">(opcional)</small></label><input type="email" value="${h(CF.correo || '')}" oninput="CF.correo=this.value" placeholder="nombre@correo.com"></div>
         </div>
+        ${emp ? '' : `<div class="club-cli">
+          <div class="campo"><label>Código de referido <small class="suave">(automático)</small></label>${CLI.bloqueCodigo()}</div>
+          ${CLI.campoReferido()}
+        </div>`}
+        <details class="plegable" ${verDir ? 'open' : ''} ontoggle="CF._verDir=this.open">
+          <summary><b>${ic('camion')} Dirección y referencia</b> <small class="suave">opcional</small><span class="pleg-res">${resumenDir}</span></summary>
+          <div class="grid g-auto">
+            <div class="campo" style="grid-column:1/-1"><label>Dirección</label><input type="text" value="${h(CF.direccion || '')}" oninput="CF.direccion=this.value;if(CF._mismaDir){CF.direccion_envio=this.value;}" placeholder="Calle, número, dpto."></div>
+            <div class="campo" style="grid-column:1/-1">
+              <label class="check" style="font-weight:600"><input type="checkbox" ${CF._mismaDir ? 'checked' : ''} onchange="CF._mismaDir=this.checked;if(this.checked){CF.direccion_envio=CF.direccion;}CLI.pintar(${nuevo})"> Los pedidos se entregan en esta misma dirección</label>
+              ${CF._mismaDir ? '' : `<input type="text" value="${h(CF.direccion_envio || '')}" oninput="CF.direccion_envio=this.value" placeholder="Dirección donde se entregan los pedidos">`}</div>
+            <div class="campo" style="grid-column:1/-1"><label>Referencia</label><input type="text" value="${h(CF.referencia || '')}" oninput="CF.referencia=this.value" placeholder="Ej.: frente al parque"></div>
+          </div>
+        </details>
+        <details class="plegable" ${verMas ? 'open' : ''} ontoggle="CF._verMas=this.open">
+          <summary><b>${emp ? 'Notas' : 'Nivel y notas'}</b> <small class="suave">opcional</small></summary>
+          <div class="grid g-auto">
+            ${emp ? '' : `<div class="campo"><label>Nivel</label><select onchange="CF.nivel_manual=this.value||null">
+              <option value="">Automático por sellos${e ? ` (${NIVELES[e.nivelAuto]})` : ''}</option>
+              ${Object.entries(NIVELES).map(([k, t]) => `<option value="${k}" ${CF.nivel_manual === k ? 'selected' : ''}>Fijar: ${t}</option>`).join('')}</select></div>`}
+            <div class="campo" style="grid-column:1/-1"><label>Notas</label><textarea oninput="CF.notas=this.value" placeholder="Gustos, horarios de entrega, alergias…">${h(CF.notas || '')}</textarea></div>
+          </div>
+        </details>
         ${ref ? `<p class="suave" style="margin:10px 0 0">Llegó referido por <a href="#" onclick="CLI.abrir('${ref.id}');return false">${h(nombreCliente(ref))}</a>.</p>` : ''}
         ${!nuevo && !emp && e.regalosPend ? `<div class="aviso-cli" style="margin-top:12px">${ic('regalo')}<span>Le toca ${plural(e.regalosPend, 'mantequilla')} de regalo.
           ${CF.regalo_agendado ? '<b>Agendado para su próxima compra.</b>' : `<button class="btn mini" onclick="NOTI.agendar('${id}')">Agendar para su próxima compra</button>`}</span></div>` : ''}
@@ -2054,14 +2071,41 @@ const CLI = {
   codigoFinal() { return limpiarCodigo(CF.codigo) || generarCodigo(CF.nombre, CF.apellido, CF.id); },
   infoCodigo() {
     const escrito = limpiarCodigo(CF.codigo);
-    if (escrito && codigoUsado(escrito, CF.id)) return `<span class="falta">${h(escrito)} ya lo usa otro cliente.</span>`;
+    if (escrito && codigoUsado(escrito, CF.id)) return `<span class="falta">${h(escrito)} ya lo usa ${h(nombreCliente(duenoCodigo(escrito, CF.id)))}.</span>`;
     if (escrito && escrito !== String(CF.codigo).trim()) return `Se guardará como <b>${h(escrito)}</b> (sin tildes ni espacios).`;
-    if (!escrito) return `Se guardará como <b>${h(CLI.codigoFinal())}</b>.`;
+    if (!String(CF.nombre || '').trim()) return 'Se arma solo con el nombre apenas lo escribas.';
+    if (!escrito) {
+      const base = 'PEANUT-' + (norm(CF.nombre).toUpperCase().replace(/[^A-Z0-9 ]/g, '').trim().split(/\s+/)[0] || 'AMIGO');
+      const d = base !== CLI.codigoFinal() && duenoCodigo(base, CF.id);
+      return d ? `${h(base)} ya es de ${h(nombreCliente(d))}, por eso varía.` : 'Se crea solo; tu amigo lo dicta al comprar.';
+    }
     return 'Tu amigo lo dicta al comprar y paga menos en su primer pack.';
   },
+  // Código como chip (copiable) con opción de cambiarlo por otra variante o uno a mano.
+  bloqueCodigo() {
+    const fin = CLI.codigoFinal(); const sinNombre = !String(CF.nombre || '').trim();
+    const alts = opcionesCodigo(CF.nombre, CF.apellido, CF.id, 5).filter(c => c !== fin).slice(0, 3);
+    return `<div class="cod-fila">
+        <button type="button" class="cod-chip ${sinNombre ? 'vacio' : ''}" id="cf-cod-chip" onclick="copiar(CLI.codigoFinal())" title="Copiar código">${h(sinNombre ? 'PEANUT-…' : fin)}${ic('copiar')}</button>
+        <button type="button" class="btn mini" onclick="CF._editCod=!CF._editCod;CLI.pintar(!D.clientes.get(CF.id))">${CF._editCod ? 'Listo' : 'Cambiar'}</button>
+      </div>
+      <small class="suave" id="cf-cod-info">${CLI.infoCodigo()}</small>
+      ${CF._editCod ? `<div class="cod-edit">
+        <div class="cod-campo"><input type="text" id="cf-cod" value="${h(CF.codigo)}" placeholder="Escribe uno a mano" autocomplete="off" spellcheck="false" oninput="CF.codigo=this.value;CLI.prevCod()"></div>
+        <div class="cod-alts" id="cf-cod-alts">${CLI.altsCodigo(alts)}</div></div>` : ''}`;
+  },
+  altsCodigo(alts) {
+    if (!String(CF.nombre || '').trim()) return '';
+    const fin = CLI.codigoFinal();
+    alts = alts || opcionesCodigo(CF.nombre, CF.apellido, CF.id, 5).filter(c => c !== fin).slice(0, 3);
+    return alts.length ? `<small class="suave">O elige:</small> ${alts.map(c => `<button type="button" class="chip" onclick="CF.codigo='${c}';CLI.pintar(!D.clientes.get(CF.id))">${h(c)}</button>`).join('')}
+      ${limpiarCodigo(CF.codigo) ? `<button type="button" class="chip" onclick="CF.codigo='';CLI.pintar(!D.clientes.get(CF.id))">Automático</button>` : ''}` : '';
+  },
   prevCod() {
-    const i = $('#cf-cod'); if (i) i.placeholder = CLI.codigoFinal();
+    const sinNombre = !String(CF.nombre || '').trim();
+    const ch = $('#cf-cod-chip'); if (ch) { ch.innerHTML = h(sinNombre ? 'PEANUT-…' : CLI.codigoFinal()) + ic('copiar'); ch.classList.toggle('vacio', sinNombre); }
     const x = $('#cf-cod-info'); if (x) x.innerHTML = CLI.infoCodigo();
+    const al = $('#cf-cod-alts'); if (al) al.innerHTML = CLI.altsCodigo();
   },
   textoCodigo() {
     return `¡Hola! Te comparto mi código de Mr. Peanut 🥜: *${CLI.codigoFinal()}*
@@ -2072,7 +2116,7 @@ Díctalo cuando hagas tu pedido por WhatsApp y pagas S/${CLUB.desc_referido} men
     const tienePedidos = lista('pedidos').some(p => p.cliente_id === CF.id && !p.anulado);
     const r = CF.referido_por ? D.clientes.get(CF.referido_por) : null;
     const opciones = lista('clientes').filter(c => !esEmpresa(c) && c.id !== CF.id && c.codigo).sort((a, b) => nombreCliente(a).localeCompare(nombreCliente(b)));
-    return `<div class="campo" style="grid-column:1/-1"><label>Referido por (código o nombre del amigo)</label>
+    return `<div class="campo"><label>Referido por <small class="suave">(código o nombre del amigo)</small></label>
       <div class="fila"><input type="search" list="cf-refs" style="flex:1;min-width:200px" value="${h(r ? `${r.codigo} · ${nombreCliente(r)}` : '')}" placeholder="Ej.: PEANUT-ANDREA" onchange="CLI.setRef(this.value)" ${tienePedidos ? 'disabled' : ''}>
         ${r && !tienePedidos ? `<button class="btn mini" onclick="CLI.setRef('')">Quitar</button>` : ''}</div>
       <datalist id="cf-refs">${opciones.map(c => `<option value="${h(`${c.codigo} · ${nombreCliente(c)}`)}"></option>`).join('')}</datalist>
@@ -2141,13 +2185,12 @@ Díctalo cuando hagas tu pedido por WhatsApp y pagas S/${CLUB.desc_referido} men
     else { const dup = clientePorCelular(CF.celular, CF.id); if (dup) err.push(`Ese celular ya es de ${nombreCliente(dup)}.`); }
     if (!CF.distrito) err.push('Elige el distrito.');
     if (String(CF.correo || '').trim() && !esCorreo(CF.correo)) err.push('El correo no es válido.');
-    if (!String(CF.direccion).trim()) err.push('Falta la dirección.');
     const codigo = limpiarCodigo(CF.codigo);
     if (!emp && codigo && codigoUsado(codigo, CF.id)) err.push(`El código ${codigo} ya lo usa otro cliente.`);
     if (err.length) return alert(err.join('\n'));
     const previo = D.clientes.get(CF.id);
     const rec = { ...(previo || {}), ...CF };
-    delete rec._mismaDir;
+    ['_mismaDir', '_verDir', '_verMas', '_editCod'].forEach(k => delete rec[k]);
     rec.celular = celNorm(rec.celular);
     rec.ruc = soloDigitos(rec.ruc);
     ['nombre', 'apellido', 'direccion', 'direccion_envio', 'distrito', 'referencia', 'razon_social', 'contacto'].forEach(k => { rec[k] = String(rec[k] || '').trim(); });

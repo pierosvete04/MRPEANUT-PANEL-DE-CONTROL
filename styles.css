@@ -547,3 +547,25 @@ tr.anulada td { opacity: .55; }
 .res-total b.grande { font-family: 'Titan One'; font-size: 32px; }
 .res-total .margen-pill { margin-top: 6px; }
 @media (max-width: 760px) { .res-grid { grid-template-columns: 1fr; } }
+
+/* ---------- formulario de cliente (compacto) ---------- */
+.g-auto { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px 16px; }
+.club-cli { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px 16px; margin-top: 14px; padding: 14px; border-radius: 12px; background: #fdf8ec; border: 1px dashed #e2d3ac; }
+.cod-fila { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.cod-chip { display: inline-flex; align-items: center; gap: 8px; padding: 7px 12px; border-radius: 10px; border: 2px solid var(--negro); background: var(--negro); color: var(--miel);
+  font: 900 16px/1.2 ui-monospace, Consolas, monospace; letter-spacing: .4px; cursor: copy; box-shadow: 2px 2px 0 var(--naranja); }
+.cod-chip .ic { width: 16px; height: 16px; }
+.cod-chip.vacio { background: #fff; color: var(--suave); border-style: dashed; box-shadow: none; }
+.cod-chip:focus-visible { outline: 3px solid var(--naranja); outline-offset: 2px; }
+.cod-edit { display: flex; flex-direction: column; gap: 8px; margin-top: 6px; }
+.cod-alts { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.cod-alts .chip { font-family: ui-monospace, Consolas, monospace; font-size: 13px; }
+.plegable { margin-top: 12px; border: 1px solid var(--linea); border-radius: 12px; background: #fff; }
+.plegable > summary { display: flex; gap: 8px; align-items: center; padding: 11px 14px; cursor: pointer; list-style: none; }
+.plegable > summary::-webkit-details-marker { display: none; }
+.plegable > summary::after { content: '▾'; margin-left: auto; color: var(--suave); transition: transform .15s; }
+.plegable[open] > summary::after { transform: rotate(180deg); }
+.plegable > summary .ic { width: 16px; height: 16px; vertical-align: -3px; }
+.pleg-res { color: var(--suave); font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; text-align: right; }
+.plegable[open] .pleg-res { display: none; }
+.plegable > .grid { padding: 0 14px 14px; }
