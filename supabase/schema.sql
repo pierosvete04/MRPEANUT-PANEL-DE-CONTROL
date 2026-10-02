@@ -158,6 +158,8 @@ alter table public.pedidos add column if not exists costo numeric(10,2);
 alter table public.pedidos add column if not exists envio_asumido boolean not null default false;
 alter table public.sellos_extra add column if not exists red text;
 alter table public.sellos_extra add column if not exists link text;
+alter table public.productos add column if not exists media jsonb not null default '[]';  -- galería: fotos y videos para Meta
+alter table public.packs add column if not exists media jsonb not null default '[]';
 
 create index if not exists stock_upd on public.movimientos_stock (updated_at);
 create index if not exists productos_upd on public.productos (updated_at);
@@ -227,6 +229,12 @@ drop policy if exists "mrp fotos cambiar" on storage.objects;
 create policy "mrp fotos ver" on storage.objects for select to authenticated using (bucket_id = 'productos' and (select privado.es_equipo()));
 create policy "mrp fotos subir" on storage.objects for insert to authenticated with check (bucket_id = 'productos' and (select privado.es_equipo()));
 create policy "mrp fotos cambiar" on storage.objects for update to authenticated using (bucket_id = 'productos' and (select privado.es_equipo()));
+drop policy if exists "mrp fotos borrar" on storage.objects;
+create policy "mrp fotos borrar" on storage.objects for delete to authenticated using (bucket_id = 'productos' and (select privado.es_equipo()));
+-- Solo imágenes y videos, hasta 50 MB por archivo.
+update storage.buckets set file_size_limit = 52428800,
+  allowed_mime_types = array['image/jpeg','image/png','image/webp','video/mp4','video/quicktime','video/webm']
+where id = 'productos';
 
 -- Vouchers de pago: bucket PRIVADO (no son públicos como las fotos del catálogo).
 insert into storage.buckets (id, name, public)

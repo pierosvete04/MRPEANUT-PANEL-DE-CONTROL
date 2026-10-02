@@ -81,8 +81,8 @@ const SUPABASE_PROYECTO = { url: 'https://ymvfbpckxegnssvjsrzt.supabase.co', ano
 
 // Columnas que existen en Supabase (lo demás es solo local, p. ej. _demo o _img_pendiente).
 const COLUMNAS = {
-  productos: ['id', 'nombre', 'sabor', 'descripcion', 'precio', 'costo', 'disponible', 'en_catalogo', 'imagen_url', 'orden', 'creado_en', 'updated_at', 'eliminado'],
-  packs: ['id', 'nombre', 'frascos', 'tipo', 'max_almendra', 'precio_oficial', 'precio_vip', 'precio_leyenda', 'descripcion', 'activo', 'en_catalogo', 'imagen_url', 'orden', 'creado_en', 'updated_at', 'eliminado'],
+  productos: ['id', 'nombre', 'sabor', 'descripcion', 'precio', 'costo', 'disponible', 'en_catalogo', 'imagen_url', 'media', 'orden', 'creado_en', 'updated_at', 'eliminado'],
+  packs: ['id', 'nombre', 'frascos', 'tipo', 'max_almendra', 'precio_oficial', 'precio_vip', 'precio_leyenda', 'descripcion', 'activo', 'en_catalogo', 'imagen_url', 'media', 'orden', 'creado_en', 'updated_at', 'eliminado'],
   clientes: ['id', 'tipo_cliente', 'codigo', 'nombre', 'apellido', 'razon_social', 'ruc', 'contacto', 'tipo_negocio', 'celular', 'correo', 'regalo_agendado', 'direccion', 'distrito', 'direccion_envio', 'referencia', 'referido_por', 'nivel_manual', 'notas', 'creado_en', 'updated_at', 'eliminado'],
   pedidos: ['id', 'numero', 'canal', 'cliente_id', 'fecha', 'fecha_entrega', 'estado_entrega', 'estado_pago', 'anulado', 'modalidad_pago', 'fecha_vencimiento', 'nivel_precio', 'items', 'subtotal', 'descuento', 'descuento_referido', 'descuento_motivo', 'envio', 'envio_asumido', 'costo', 'igv', 'total', 'pagos', 'metodo_pago', 'courier', 'comprobante', 'guia', 'direccion_envio', 'referido_por', 'notas', 'entregado_en', 'creado_en', 'updated_at', 'eliminado'],
   sellos_extra: ['id', 'cliente_id', 'tipo', 'cantidad', 'pedido_id', 'red', 'link', 'nota', 'fecha', 'creado_en', 'updated_at', 'eliminado'],
@@ -2251,7 +2251,7 @@ function renderProductos() {
     <h3>Mantequillas (precio suelto)</h3>
     <div class="prod-grid">${ps.map(p => `<div class="prod">
       <img src="${h(fotoDe('productos', p))}" alt="" loading="lazy">
-      <div class="info"><b>${h(p.nombre)}</b><span class="precio">${soles(p.precio)}</span>
+      <div class="info"><b>${h(p.nombre)}</b><span class="precio">${soles(p.precio)}</span>${tagMedia(p)}
         ${(() => { const c = costoProducto(p.id); const m = margenDe(+p.precio, c); return `<div class="costo-linea"><span>Costo <b>${soles(c)}</b></span><span>Ganas <b>${soles(+p.precio - c)}</b></span><span class="margen-pill ${claseMargen(m)}">${pct(m)}</span></div>`; })()}
         <div class="fila">${p.disponible !== false ? '<span class="tag entregado">Con stock</span>' : '<span class="tag anulado">Agotado</span>'} ${p.en_catalogo ? '<span class="tag pagado">En catálogo</span>' : '<span class="tag pausa">Oculto en Meta</span>'} ${p._img_pendiente ? '<span class="tag pendiente">foto sin subir</span>' : ''}</div>
         <div class="acc"><button class="btn mini" onclick="PR.abrir('${p.id}')">Editar</button><button class="btn mini" onclick="PR.stock('${p.id}')">${p.disponible !== false ? 'Marcar agotado' : 'Hay stock'}</button></div></div></div>`).join('')}</div>
@@ -2261,7 +2261,7 @@ function renderProductos() {
       <thead><tr><th></th><th>Pack</th><th class="cen">Frascos</th><th>Regla</th><th class="der">Oficial</th><th class="der">VIP</th><th class="der">Leyenda</th><th class="cen">Activo</th><th class="cen">En Meta</th><th></th></tr></thead>
       <tbody>${packs.map(p => `<tr>
         <td><img src="${h(fotoDe('packs', p))}" alt="" style="width:48px;height:48px;object-fit:cover;border-radius:8px"></td>
-        <td><b>${h(p.nombre)}</b></td><td class="cen">${p.frascos}</td>
+        <td><b>${h(p.nombre)}</b>${tagMedia(p)}</td><td class="cen">${p.frascos}</td>
         <td><small>${p.tipo === 'almendra' ? 'solo almendra' : `máx. ${p.max_almendra} de almendra`}</small></td>
         ${['oficial', 'vip', 'leyenda'].map(n => { const m = margenPack(p, precioPack(p, n)); return `<td class="der"><input type="number" min="0" step="0.5" value="${p['precio_' + n] ?? ''}" placeholder="—" onchange="PK.precio('${p.id}','${n}',this.value)">
           ${m ? `<br><small class="${claseMargen(m.min)}-txt" title="Margen con la mezcla más cara y la más barata">${Math.round(m.min) === Math.round(m.max) ? pct(m.min) : `${Math.round(m.min)}–${pct(m.max)}`}</small>` : ''}</td>`; }).join('')}
@@ -2294,21 +2294,37 @@ function renderProductos() {
     </div>`;
 }
 
+function tagMedia(r) {
+  const c = contarMedia(r); if (!c.fotos && !c.videos) return '';
+  return `<div class="media-cuenta">${ic('camara')} ${[c.fotos ? plural(c.fotos, 'foto') : '', c.videos ? plural(c.videos, 'video') : ''].filter(Boolean).join(' · ')} más${c.pendientes ? ` <span class="tag pendiente">${c.pendientes} por subir</span>` : ''}</div>`;
+}
+// Fotos adicionales y videos (solo los que ya están en internet) en el formato del catálogo de Meta.
+function mediaMeta(r) {
+  const ms = (r.media || []).filter(m => /^https?:/.test(m.url || ''));
+  const out = { additional_image_link: ms.filter(m => m.tipo === 'imagen').slice(0, MAX_FOTOS_META).map(m => m.url).join(',') };
+  ms.filter(m => m.tipo === 'video').slice(0, MAX_VIDEOS_META).forEach((m, i) => { out[`video[${i}].url`] = m.url; });
+  return out;
+}
 function filasMeta() {
   const wa = soloDigitos(CFG.whatsapp);
   const link = nombre => wa ? waLink(wa, `Hola Mr. Peanut, quiero: ${nombre}`) : '';
   const out = [];
   lista('productos').filter(p => p.en_catalogo).sort((a, b) => (a.orden || 0) - (b.orden || 0)).forEach(p => out.push({
     id: p.id, title: p.nombre, description: p.descripcion || p.nombre, availability: p.disponible !== false ? 'in stock' : 'out of stock',
-    condition: 'new', price: `${(+p.precio).toFixed(2)} PEN`, link: link(p.nombre), image_link: p.imagen_url || '', brand: 'Mr. Peanut',
+    condition: 'new', price: `${(+p.precio).toFixed(2)} PEN`, link: link(p.nombre), image_link: p.imagen_url || '', brand: 'Mr. Peanut', ...mediaMeta(p),
   }));
   lista('packs').filter(p => p.en_catalogo && p.activo !== false && precioPack(p, 'oficial') != null).sort((a, b) => (a.orden || 0) - (b.orden || 0)).forEach(p => out.push({
     id: p.id, title: p.nombre, description: p.descripcion || p.nombre, availability: 'in stock',
-    condition: 'new', price: `${precioPack(p, 'oficial').toFixed(2)} PEN`, link: link(p.nombre), image_link: p.imagen_url || '', brand: 'Mr. Peanut',
+    condition: 'new', price: `${precioPack(p, 'oficial').toFixed(2)} PEN`, link: link(p.nombre), image_link: p.imagen_url || '', brand: 'Mr. Peanut', ...mediaMeta(p),
   }));
   return out;
 }
-const csvMeta = () => { const cols = ['id', 'title', 'description', 'availability', 'condition', 'price', 'link', 'image_link', 'brand']; return aCSV([cols, ...filasMeta().map(f => cols.map(c => f[c]))]); };
+const csvMeta = () => {
+  const filas = filasMeta();
+  const nVid = Math.max(0, ...filas.map(f => Object.keys(f).filter(k => k.startsWith('video[')).length));
+  const cols = ['id', 'title', 'description', 'availability', 'condition', 'price', 'link', 'image_link', 'additional_image_link', 'brand', ...Array.from({ length: nVid }, (_, i) => `video[${i}].url`)];
+  return aCSV([cols, ...filas.map(f => cols.map(c => f[c] ?? ''))]);
+};
 
 async function redimensionar(file, max = 1000) {
   const bmp = await createImageBitmap(file);
@@ -2331,6 +2347,57 @@ async function guardarFoto(tabla, rec) {
   rec._img_pendiente = true; FOTO_NUEVA = null;
 }
 
+// ---- Galería de fotos y videos adicionales (productos y packs) → catálogo de Meta.
+// Se guardan primero en la PC (IndexedDB) y se suben solas a Supabase al sincronizar.
+const MAX_FOTOS_META = 20; const MAX_VIDEOS_META = 5; const MAX_VIDEO_MB = 50;
+const TIPOS_VIDEO = { 'video/mp4': 'mp4', 'video/quicktime': 'mov', 'video/webm': 'webm' };
+const mediaUrl = m => IMG[`media/${m.id}`] || m.url || '';
+const contarMedia = r => { const ms = r.media || []; return { fotos: ms.filter(m => m.tipo === 'imagen').length, videos: ms.filter(m => m.tipo === 'video').length, pendientes: ms.filter(m => m._pendiente).length }; };
+const GAL = {
+  f: null,
+  html(f) {
+    GAL.f = f; f.media ||= [];
+    return `<div class="galeria-card"><div class="fila" style="margin-bottom:10px"><h3 style="margin:0">${ic('camara')} Fotos y videos adicionales</h3>
+        <label class="btn mini" style="margin-left:auto">＋ Agregar fotos o videos<input type="file" accept="image/*,video/mp4,video/quicktime,video/webm" multiple hidden onchange="GAL.agregar(this)"></label></div>
+      <p class="suave" style="margin:0 0 10px;font-size:13.5px">Van al catálogo de Meta junto con la foto principal: hasta ${MAX_FOTOS_META} fotos y ${MAX_VIDEOS_META} videos (MP4, máx. ${MAX_VIDEO_MB} MB cada uno). WhatsApp muestra las fotos; los videos los usa Meta en Facebook e Instagram. Se guardan aquí y se suben solos al sincronizar.</p>
+      <div id="gal"></div></div>`;
+  },
+  pintar() {
+    const el = $('#gal'); if (!el || !GAL.f) return;
+    const ms = GAL.f.media;
+    el.innerHTML = ms.length ? `<div class="gal-grid">${ms.map((m, i) => `<div class="gal-item">
+        ${m.tipo === 'video' ? `<video src="${h(mediaUrl(m))}" muted playsinline preload="metadata" controls></video>` : `<img src="${h(mediaUrl(m))}" alt="" loading="lazy">`}
+        <span class="gal-tag">${m.tipo === 'video' ? 'Video' : `Foto ${ms.slice(0, i + 1).filter(x => x.tipo === 'imagen').length}`}${m._pendiente ? ' · por subir' : ''}</span>
+        <div class="gal-acc"><button type="button" title="Mover antes" ${i ? '' : 'disabled'} onclick="GAL.mover(${i},-1)">◀</button><button type="button" title="Mover después" ${i < ms.length - 1 ? '' : 'disabled'} onclick="GAL.mover(${i},1)">▶</button><button type="button" class="quitar" title="Quitar" onclick="GAL.quitar(${i})">✕</button></div>
+      </div>`).join('')}</div>` : '<div class="gal-vacia">Todavía no hay fotos ni videos adicionales.</div>';
+  },
+  async agregar(input) {
+    const ms = GAL.f.media; const avisos = [];
+    for (const file of [...input.files]) {
+      const esVideo = file.type.startsWith('video/');
+      if (esVideo && !TIPOS_VIDEO[file.type]) { avisos.push(`${file.name}: usa MP4, MOV o WEBM.`); continue; }
+      if (esVideo && file.size > MAX_VIDEO_MB * 1048576) { avisos.push(`${file.name}: pesa ${Math.round(file.size / 1048576)} MB (máx. ${MAX_VIDEO_MB}).`); continue; }
+      if (!esVideo && !file.type.startsWith('image/')) { avisos.push(`${file.name}: no es foto ni video.`); continue; }
+      if (esVideo && ms.filter(m => m.tipo === 'video').length >= MAX_VIDEOS_META) { avisos.push(`Máximo ${MAX_VIDEOS_META} videos.`); continue; }
+      if (!esVideo && ms.filter(m => m.tipo === 'imagen').length >= MAX_FOTOS_META) { avisos.push(`Máximo ${MAX_FOTOS_META} fotos adicionales.`); continue; }
+      const blob = esVideo ? file : await redimensionar(file, 1600);
+      const id = uid();
+      await idb.put('imagenes', { clave: `media/${id}`, blob });
+      IMG[`media/${id}`] = URL.createObjectURL(blob);
+      ms.push({ id, tipo: esVideo ? 'video' : 'imagen', ext: esVideo ? TIPOS_VIDEO[file.type] : 'jpg', nombre: file.name, _pendiente: true });
+    }
+    input.value = '';
+    if (avisos.length) alert(avisos.join('\n'));
+    GAL.pintar();
+  },
+  mover(i, d) { const ms = GAL.f.media; [ms[i], ms[i + d]] = [ms[i + d], ms[i]]; GAL.pintar(); },
+  quitar(i) {
+    const m = GAL.f.media[i]; if (!confirm(`¿Quitar ${m.tipo === 'video' ? 'este video' : 'esta foto'}?`)) return;
+    if (m.ruta) (GAL.f._borrar_media ||= []).push(m.ruta);
+    GAL.f.media.splice(i, 1); GAL.pintar();
+  },
+};
+
 let PRF = null;
 const PR = {
   abrir(id) {
@@ -2352,9 +2419,9 @@ const PR = {
           <div class="campo" style="grid-column:1/-1"><label>Descripción (la que ve el cliente en Meta)</label><textarea style="min-height:120px" oninput="PRF.descripcion=this.value">${h(PRF.descripcion)}</textarea></div>
           <label class="check"><input type="checkbox" ${PRF.disponible !== false ? 'checked' : ''} onchange="PRF.disponible=this.checked"> Hay stock</label>
           <label class="check"><input type="checkbox" ${PRF.en_catalogo ? 'checked' : ''} onchange="PRF.en_catalogo=this.checked"> Mostrar en el catálogo de Meta</label>
-        </div></div></div>
+        </div></div>${GAL.html(PRF)}</div>
       <div class="modal-pie">${id ? `<button class="btn peligro" style="margin-right:auto" onclick="PR.borrar()">Eliminar</button>` : ''}<button class="btn" onclick="volver()">Cancelar</button><button class="btn prim" onclick="PR.guardar()">Guardar</button></div>`);
-    PR.margen();
+    PR.margen(); GAL.pintar();
   },
   margen() {
     const el = $('#pr-margen'); if (!el) return;
@@ -2367,7 +2434,8 @@ const PR = {
     if (!PRF.id) return alert('Falta el ID.');
     const esNuevo = !D.productos.get(PRF.id);
     if (esNuevo && lista('productos').some(p => p.sabor === PRF.sabor)) { if (!confirm(`Ya hay un producto de sabor ${nombreSabor(PRF.sabor)}. El precio suelto que usa el pedido será el del primero. ¿Guardar igual?`)) return; }
-    const rec = { ...(D.productos.get(PRF.id) || {}), ...PRF };
+    const prev = D.productos.get(PRF.id);
+    const rec = { ...(prev || {}), ...PRF, _borrar_media: [...(prev?._borrar_media || []), ...(PRF._borrar_media || [])] };
     await guardarFoto('productos', rec);
     await guardar('productos', rec); toast('Producto guardado.'); volver();
   },
@@ -2396,14 +2464,16 @@ const PK = {
           <div class="campo" style="grid-column:1/-1"><label>Descripción para Meta</label><textarea style="min-height:100px" oninput="PKF.descripcion=this.value">${h(PKF.descripcion)}</textarea></div>
           <label class="check"><input type="checkbox" ${PKF.activo !== false ? 'checked' : ''} onchange="PKF.activo=this.checked"> Activo (se puede vender)</label>
           <label class="check"><input type="checkbox" ${PKF.en_catalogo ? 'checked' : ''} onchange="PKF.en_catalogo=this.checked"> Mostrar en Meta (precio oficial)</label>
-        </div></div></div>
+        </div></div>${GAL.html(PKF)}</div>
       <div class="modal-pie">${id ? `<button class="btn peligro" style="margin-right:auto" onclick="PK.borrar()">Eliminar</button>` : ''}<button class="btn" onclick="volver()">Cancelar</button><button class="btn prim" onclick="PK.guardar()">Guardar</button></div>`);
+    GAL.pintar();
   },
   async guardar() {
     if (!PKF.nombre.trim()) return alert('Falta el nombre.');
     if (!(PKF.frascos >= 1)) return alert('El pack necesita al menos 1 frasco.');
     if (PKF.tipo === 'almendra') PKF.max_almendra = PKF.frascos;
-    const rec = { ...(D.packs.get(PKF.id) || {}), ...PKF };
+    const prev = D.packs.get(PKF.id);
+    const rec = { ...(prev || {}), ...PKF, _borrar_media: [...(prev?._borrar_media || []), ...(PKF._borrar_media || [])] };
     await guardarFoto('packs', rec);
     await guardar('packs', rec); toast('Pack guardado.'); volver();
   },
@@ -2621,7 +2691,7 @@ async function sincronizar(manual) {
     // Primero los datos: una foto que falle nunca debe frenar el respaldo.
     await subirCola();
     let avisoFotos = null;
-    try { await subirFotos(); await subirVouchers(); await subirCola(); }
+    try { await subirFotos(); await subirMedia(); await subirVouchers(); await subirCola(); }
     catch (e) { avisoFotos = e.message || String(e); }
     const bajados = await bajarCambios();
     if (avisoFotos && manual) toast('Datos sincronizados. Algunas fotos quedaron pendientes: ' + avisoFotos, 6000);
@@ -2660,6 +2730,26 @@ async function subirFotos() {
     }
   }
 }
+// Galería de productos y packs: fotos y videos que se agregaron sin internet (o recién) y los que se quitaron.
+async function subirMedia() {
+  for (const tabla of ['productos', 'packs']) {
+    for (const r of [...D[tabla].values()].filter(x => !x._demo && ((x.media || []).some(m => m._pendiente) || x._borrar_media?.length))) {
+      for (const ruta of r._borrar_media || []) {
+        await fetch(`${CFG.supabase.url}/storage/v1/object/productos/${ruta}`, { method: 'DELETE', headers: await cabeceras() }).catch(() => {});
+      }
+      if (r._borrar_media?.length) { delete r._borrar_media; await idb.put(tabla, r); }
+      let cambio = false;
+      for (const m of r.media || []) {
+        if (!m._pendiente) continue;
+        const g = await idb.get('imagenes', `media/${m.id}`); if (!g?.blob) continue; // está en otra PC
+        const ruta = `${tabla}/${encodeURIComponent(r.id)}/${m.id}.${m.ext || 'jpg'}`;
+        await subirArchivo('productos', ruta, g.blob);
+        m.ruta = ruta; m.url = `${CFG.supabase.url}/storage/v1/object/public/productos/${ruta}`; delete m._pendiente; cambio = true;
+      }
+      if (cambio) await guardar(tabla, r);
+    }
+  }
+}
 // Vouchers de pago: bucket privado "comprobantes" (solo lo ve el usuario con sesión).
 async function subirVouchers() {
   for (const p of [...D.pedidos.values()].filter(x => !x._demo && (x.pagos || []).some(y => y._foto_pendiente))) {
@@ -2680,8 +2770,8 @@ const NO_NULOS = {
   _todas: { eliminado: false },
   clientes: { tipo_cliente: 'persona', regalo_agendado: false, nombre: '' },
   pedidos: { canal: 'b2c', estado_entrega: 'por_preparar', estado_pago: 'pendiente', anulado: false, envio_asumido: false, items: [], pagos: [] },
-  productos: { precio: 0, disponible: true, en_catalogo: true, nombre: '' },
-  packs: { tipo: 'mixto', max_almendra: 1, activo: true, en_catalogo: true, frascos: 1, nombre: '' },
+  productos: { precio: 0, disponible: true, en_catalogo: true, nombre: '', media: [] },
+  packs: { tipo: 'mixto', max_almendra: 1, activo: true, en_catalogo: true, frascos: 1, nombre: '', media: [] },
   sellos_extra: { cantidad: 1, tipo: 'ajuste' },
   movimientos_stock: { tipo: 'ajuste', cantidad: 0 },
 };
