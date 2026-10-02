@@ -2830,6 +2830,15 @@ function renderAjustes() {
           <p class="suave" style="font-size:13.5px">La contraseña no se guarda: solo se usa para iniciar la sesión.</p>
           <button class="btn prim" onclick="conectarSupabase()">Conectar y subir datos</button><div id="sb-msg" style="margin-top:10px"></div>`}
       </div>
+      ${window.escritorio ? `<div class="card" style="grid-column:1/-1"><h3>${ic('sync')} Actualizaciones del sistema</h3>
+        <div class="act-sistema">
+          <div><small class="suave">Programa</small><b id="esc-prog">…</b></div>
+          <div><small class="suave">Panel</small><b id="esc-panel">…</b></div>
+          <div style="flex:2;min-width:240px"><small class="suave">Estado</small><span id="esc-estado">Revisa GitHub al abrir el programa y cada 30 minutos.</span></div>
+          <button class="btn prim" id="esc-btn" onclick="ESC.buscar(this)">${ic('sync')} Buscar actualizaciones del sistema</button>
+        </div>
+        <p id="esc-msg" class="suave" style="margin:10px 0 0"></p>
+      </div>` : ''}
     </div>`;
   } else if (sub === 'negocio') {
     cuerpo = `<div class="grid g2">
@@ -2868,11 +2877,7 @@ function renderAjustes() {
         <div class="fila"><button class="btn" onclick="exportarRespaldo()">Descargar respaldo</button>
           <label class="btn">Restaurar respaldo<input type="file" accept=".json" hidden onchange="importarRespaldo(this)"></label></div>
       </div>
-      ${window.escritorio ? `<div class="card"><h3>Programa de escritorio</h3>
-        <p class="suave" style="margin-top:0">El panel se actualiza solo desde GitHub: revisa al abrir y cada 30 minutos.</p>
-        <p id="esc-version" class="suave">Versión…</p>
-        <button class="btn" onclick="ESC.buscar(this)">Buscar actualizaciones</button> <span id="esc-msg" class="suave"></span>
-      </div>` : `<div class="card"><h3>Instalar en esta computadora</h3>
+      ${window.escritorio ? '' : `<div class="card"><h3>Instalar en esta computadora</h3>
         ${matchMedia('(display-mode: standalone)').matches ? '<div class="aviso ok">Ya está instalado como aplicación.</div>' : `
         <p class="suave" style="margin-top:0">Abre el panel en Chrome o Edge y usa el botón <b>Instalar</b> (arriba a la derecha) o el ícono ⊕ de la barra de direcciones. Queda en el menú Inicio y abre sin internet.</p>
         ${eventoInstalar ? '<button class="btn prim" onclick="instalar()">Instalar ahora</button>' : ''}`}
@@ -2886,19 +2891,48 @@ function renderAjustes() {
     ${cuerpo}`;
   ESC.pintar();
 }
-// Programa de escritorio (solo existe dentro del .exe).
+// Programa de escritorio (solo existe dentro del .exe): versiones y actualizaciones del sistema
+// (el panel se baja de la rama main; el programa, de los Releases de GitHub).
 const ESC = {
+  estado: null,
+  textoEstado(e) {
+    if (!e) return null;
+    return ({
+      buscando: 'Buscando una versión nueva del programa…',
+      descargando: `Bajando el programa ${e.version || ''}: ${e.progreso || 0}%`,
+      lista: `La versión ${e.version} del programa está lista. Se instala al reiniciar (o al cerrar el programa).`,
+      al_dia: 'El programa y el panel están al día.',
+      error: `No se pudo revisar el programa: ${e.error || ''}`,
+    })[e.estado] || null;
+  },
+  pintarEstado() {
+    const el = $('#esc-estado'); if (!el) return;
+    const t = ESC.textoEstado(ESC.estado); if (t) el.textContent = t;
+    const b = $('#esc-btn');
+    if (b && ESC.estado?.estado === 'lista') b.innerHTML = `${ic('sync')} Reiniciar e instalar ${h(ESC.estado.version || '')}`;
+  },
   async pintar() {
-    const el = $('#esc-version'); if (!el || !window.escritorio) return;
+    if (!window.escritorio || !$('#esc-prog')) return;
     const v = await window.escritorio.version();
-    el.innerHTML = `Programa <b>v${h(v.programa)}</b> · panel <b>${h(v.panel)}</b>`;
+    if (v.estado) ESC.estado = v.estado;
+    $('#esc-prog').textContent = `v${v.programa}`; $('#esc-panel').textContent = v.panel;
+    ESC.pintarEstado();
   },
   async buscar(btn) {
     btn.disabled = true; $('#esc-msg').textContent = 'Revisando GitHub…';
-    $('#esc-msg').textContent = await window.escritorio.buscarActualizacion() || '';
+    try {
+      if (window.escritorio.buscarSistema) {
+        const r = await window.escritorio.buscarSistema();
+        ESC.estado = r.estado; $('#esc-msg').textContent = [r.panel, r.programa].filter(Boolean).join(' ');
+      } else {
+        // Programa 1.0.0: solo sabe revisar el panel; el programa se actualiza solo al cerrarlo.
+        $('#esc-msg').textContent = `${await window.escritorio.buscarActualizacion() || ''} El programa busca su propia actualización al abrir y la instala al cerrarlo.`;
+      }
+    } catch (e) { $('#esc-msg').textContent = 'No se pudo revisar: ' + (e.message || e); }
     btn.disabled = false; ESC.pintar();
   },
 };
+if (window.escritorio?.alCambiarEstado) window.escritorio.alCambiarEstado(e => { ESC.estado = e; ESC.pintarEstado(); });
 const AJ = {
   async set(k, v) { CFG[k] = v; await guardarConfig(); toast('Guardado.'); },
   async agregarCourier() { const v = $('#aj-courier').value.trim(); if (!v) return; CFG.couriers = [...new Set([...couriers(), v])]; await guardarConfig(); renderAjustes(); },

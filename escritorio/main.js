@@ -73,17 +73,57 @@ async function revisarPanel(manual = false) {
   }
 }
 
-function actualizarPrograma() {
-  if (!app.isPackaged) return;
+// ---- Actualización del programa (.exe) desde los Releases de GitHub.
+// Se baja sola en segundo plano; al terminar pregunta si reiniciar ahora (si no, se instala al cerrar).
+// El estado se le pasa al panel para mostrarlo en Sincronización.
+let actualizador = null;
+const estadoPrograma = { estado: 'sin_revisar', version: null, progreso: 0, error: null };
+function avisarEstado(cambios) {
+  Object.assign(estadoPrograma, cambios);
+  if (win && !win.isDestroyed()) win.webContents.send('escritorio:estado', { ...estadoPrograma });
+}
+function prepararActualizador() {
+  if (actualizador || !app.isPackaged) return actualizador;
   try {
-    const { autoUpdater } = require('electron-updater');
-    autoUpdater.autoInstallOnAppQuit = true;
-    autoUpdater.checkForUpdatesAndNotify().catch(() => {});
-  } catch { /* sin electron-updater: solo se actualiza el panel */ }
+    ({ autoUpdater: actualizador } = require('electron-updater'));
+  } catch { return null; }
+  actualizador.autoDownload = true;
+  actualizador.autoInstallOnAppQuit = true;
+  actualizador.on('checking-for-update', () => avisarEstado({ estado: 'buscando', error: null }));
+  actualizador.on('update-not-available', () => avisarEstado({ estado: 'al_dia' }));
+  actualizador.on('update-available', i => avisarEstado({ estado: 'descargando', version: i.version, progreso: 0 }));
+  actualizador.on('download-progress', p => avisarEstado({ estado: 'descargando', progreso: Math.round(p.percent || 0) }));
+  actualizador.on('error', e => avisarEstado({ estado: 'error', error: String(e?.message || e).slice(0, 200) }));
+  actualizador.on('update-downloaded', async i => {
+    avisarEstado({ estado: 'lista', version: i.version, progreso: 100 });
+    if (!win) return;
+    const { response } = await dialog.showMessageBox(win, {
+      type: 'info', buttons: ['Reiniciar e instalar', 'Al cerrar el programa'], defaultId: 0, cancelId: 1,
+      title: 'Actualización del programa', message: `Está lista la versión ${i.version} del programa`,
+      detail: 'Al reiniciar se instala en unos segundos. Tus datos no se pierden; si estabas llenando un pedido, guárdalo antes.',
+    });
+    if (response === 0) actualizador.quitAndInstall();
+  });
+  return actualizador;
+}
+async function revisarPrograma() {
+  const a = prepararActualizador();
+  if (!a) return 'El programa se actualiza solo cuando está instalado.';
+  if (estadoPrograma.estado === 'lista') { a.quitAndInstall(); return 'Instalando…'; }
+  try {
+    const r = await a.checkForUpdates();
+    const nueva = r?.updateInfo?.version;
+    return nueva && nueva !== app.getVersion() ? `Bajando el programa ${nueva}…` : `El programa está al día (v${app.getVersion()}).`;
+  } catch (e) { return `No se pudo revisar el programa: ${String(e?.message || e).slice(0, 120)}`; }
 }
 
-ipcMain.handle('escritorio:version', () => ({ programa: app.getVersion(), panel: panel.descripcion() }));
+ipcMain.handle('escritorio:version', () => ({ programa: app.getVersion(), panel: panel.descripcion(), estado: { ...estadoPrograma } }));
 ipcMain.handle('escritorio:buscar', () => revisarPanel(true));
+// Botón "Buscar actualizaciones del sistema": revisa el panel y el programa a la vez.
+ipcMain.handle('escritorio:buscarSistema', async () => {
+  const [p, g] = await Promise.all([revisarPanel(true), revisarPrograma()]);
+  return { panel: p, programa: g, estado: { ...estadoPrograma }, version: { programa: app.getVersion(), panel: panel.descripcion() } };
+});
 
 app.whenReady().then(() => {
   protocol.handle('mrp', async req => {
@@ -101,7 +141,8 @@ app.whenReady().then(() => {
   crearVentana();
   setTimeout(() => revisarPanel(false), 4000);
   setInterval(() => revisarPanel(false), REVISAR_CADA);
-  actualizarPrograma();
+  setTimeout(() => { if (prepararActualizador()) actualizador.checkForUpdates().catch(() => {}); }, 8000);
+  setInterval(() => { if (prepararActualizador() && estadoPrograma.estado !== 'lista') actualizador.checkForUpdates().catch(() => {}); }, 4 * REVISAR_CADA);
 });
 
 app.on('window-all-closed', () => app.quit());

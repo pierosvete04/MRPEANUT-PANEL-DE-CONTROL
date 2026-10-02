@@ -1,6 +1,6 @@
 // Service worker: guarda la app en la PC para que abra sin internet.
 // Sube VERSION cada vez que cambies archivos del panel.
-const VERSION = 'mrp-panel-v12';
+const VERSION = 'mrp-panel-v13';
 const ARCHIVOS = [
   './', './index.html', './app.js', './styles.css', './manifest.webmanifest',
   './img/logo.png', './img/sello.png', './img/icono-192.png', './img/icono-512.png',
