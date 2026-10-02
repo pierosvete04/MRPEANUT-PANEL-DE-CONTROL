@@ -1,0 +1,46 @@
+{
+  "name": "mrpeanut-panel",
+  "productName": "Mr. Peanut Panel",
+  "version": "1.0.0",
+  "description": "Panel de control de Mr. Peanut: pedidos, clientes, Club e inventario.",
+  "author": "Mr. Peanut",
+  "license": "UNLICENSED",
+  "private": true,
+  "main": "main.js",
+  "scripts": {
+    "preparar": "node preparar.js",
+    "start": "node preparar.js && electron .",
+    "instalador": "node preparar.js && electron-builder --win --publish never",
+    "publicar": "node preparar.js && electron-builder --win --publish always"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9"
+  },
+  "devDependencies": {
+    "electron": "^44.5.1",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "pe.mrpeanut.panel",
+    "productName": "Mr. Peanut Panel",
+    "copyright": "Mr. Peanut",
+    "directories": { "output": "dist", "buildResources": "recursos" },
+    "files": ["main.js", "preload.js", "actualizador.js", "icono.png", "package.json"],
+    "extraResources": [{ "from": "build/panel", "to": "panel" }],
+    "win": {
+      "target": [{ "target": "nsis", "arch": ["x64"] }],
+      "icon": "recursos/icono.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Mr. Peanut Panel",
+      "artifactName": "MrPeanut-Panel-Setup-${version}.${ext}",
+      "uninstallDisplayName": "Mr. Peanut Panel"
+    },
+    "publish": [{ "provider": "github", "owner": "pierosvete04", "repo": "MRPEANUT-PANEL-DE-CONTROL", "releaseType": "release" }]
+  }
+}

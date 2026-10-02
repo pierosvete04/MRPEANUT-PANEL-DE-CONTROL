@@ -1,0 +1,7 @@
+# Programa de escritorio: dependencias y archivos que se generan al empaquetar
+escritorio/node_modules/
+escritorio/dist/
+escritorio/build/
+escritorio/recursos/
+escritorio/icono.png
+escritorio/prueba-*.js
