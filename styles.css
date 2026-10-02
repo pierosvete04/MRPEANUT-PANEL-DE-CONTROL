@@ -531,3 +531,19 @@ tr.anulada td { opacity: .55; }
 /* canje (pedidos por publicidad) */
 .tag.canje { background: #f3e8ff; color: #6b21a8; }
 .canje-check { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 10px 12px; border: 1px dashed #d8cba9; border-radius: 12px; background: #fffcf5; }
+
+/* resultado del mes (Inicio) */
+.resultado .res-cab { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+.resultado .res-cab h3 { margin: 0; }
+.resultado .res-cab select { width: auto; }
+.res-grid { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); gap: 18px; align-items: start; }
+.res-col .fila-r { display: flex; justify-content: space-between; gap: 10px; padding: 5px 0; font-size: 15px; border-bottom: 1px dashed #efe5cd; }
+.res-col .fila-r.rojo b { color: var(--error); }
+.res-col .fila-r.sub { background: #fffaf0; font-size: 15.5px; }
+.fijos-in { color: var(--error); font-weight: 800; white-space: nowrap; }
+.fijos-in input { width: 90px; padding: 3px 6px; text-align: right; font-weight: 800; }
+.res-total { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; background: #fffaf0; border: 1px solid var(--linea); border-radius: var(--radio); padding: 16px; }
+.res-total b.num { font-size: 22px; }
+.res-total b.grande { font-family: 'Titan One'; font-size: 32px; }
+.res-total .margen-pill { margin-top: 6px; }
+@media (max-width: 760px) { .res-grid { grid-template-columns: 1fr; } }

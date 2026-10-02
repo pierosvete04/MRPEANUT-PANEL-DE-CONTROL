@@ -523,10 +523,11 @@ const UI = {
   ped: { filtro: 'atender', canal: 'todos', q: '', mes: hoy().slice(0, 7) },
   cli: { q: '', nivel: 'todos', tipo: 'persona', orden: 'reciente' },
   club: 'resumen', ajustes: 'conexion',
+  hist: { tipo: 'todo', mes: hoy().slice(0, 7), q: '', ver: 150 }, res: { mes: hoy().slice(0, 7) },
   ana: { periodo: '90', canal: 'todos', cliente: '', riesgo: 'todos' },
 };
-const ORDEN_VISTAS = ['inicio', 'pedidos', 'clientes', 'analisis', 'club', 'productos', 'inventario', 'ajustes'];
-const VISTAS = { inicio: () => renderInicio(), pedidos: () => renderPedidos(), clientes: () => renderClientes(), analisis: () => renderAnalisis(), club: () => renderClub(), productos: () => renderProductos(), inventario: () => renderInventario(), ajustes: () => renderAjustes() };
+const ORDEN_VISTAS = ['inicio', 'pedidos', 'clientes', 'historial', 'analisis', 'club', 'productos', 'inventario', 'ajustes'];
+const VISTAS = { inicio: () => renderInicio(), pedidos: () => renderPedidos(), clientes: () => renderClientes(), historial: () => renderHistorial(), analisis: () => renderAnalisis(), club: () => renderClub(), productos: () => renderProductos(), inventario: () => renderInventario(), ajustes: () => renderAjustes() };
 // La pestaña (y la subpágina de Club / Sincronización) se recuerda: al recargar vuelves al mismo lugar.
 function recordarVista() {
   const h_ = '#' + UI.vista + (UI.vista === 'club' && UI.club !== 'resumen' ? '/' + UI.club : UI.vista === 'ajustes' && UI.ajustes !== 'conexion' ? '/' + UI.ajustes : '');
@@ -735,6 +736,7 @@ function renderInicio() {
   const cercaVip = lista('clientes').filter(c => !esEmpresa(c) && C[c.id].nivelAuto === 'oficial' && !c.nivel_manual && C[c.id].faltaVip > 0 && C[c.id].faltaVip <= 2);
   const dormidos = lista('clientes').filter(c => { const e = C[c.id]; return e.ultima && (e.dias >= 30 || (e.frecuencia && e.dias > e.frecuencia + 3)); });
   const sinDoc = activos.filter(p => esVenta(p) && !p.comprobante?.numero);
+  const canjesPend = activos.filter(p => p.canje && !p.canje_cumplido);
   const orden = { en_camino: 0, preparado: 1, por_preparar: 2 };
   const agenda = [...porEntregar].sort((a, b) => orden[a.estado_entrega] - orden[b.estado_entrega] || (a.fecha_entrega || '9').localeCompare(b.fecha_entrega || '9') || a.fecha.localeCompare(b.fecha)).slice(0, 8);
   const dias14 = Array.from({ length: 14 }, (_, i) => sumarDias(hoyS, i - 13));
@@ -747,6 +749,7 @@ function renderInicio() {
     [vencidos.length, 'dinero', 'Créditos B2B vencidos', "UI.ped.filtro='cobrar';UI.ped.canal='b2b';ir('pedidos')"],
     [sinDoc.length, 'pedidos', 'Ventas sin boleta o factura', "UI.ped.filtro='documento';UI.ped.canal='todos';ir('pedidos')"],
     [regalos.length, 'regalo', 'Clientes con regalo del Club por entregar', "ir('club')"],
+    [canjesPend.length, 'camara', 'Canjes que falta publicar', "UI.ped.filtro='canje_pend';UI.ped.canal='todos';UI.ped.mes='';ir('pedidos')"],
     [cercaVip.length, 'estrella', 'Clientes a 1 o 2 sellos del VIP', "ir('club')"],
     [dormidos.length, 'reloj', 'Clientes que no están comprando', "ir('analisis')"],
   ].filter(a => a[0] > 0);
@@ -770,6 +773,7 @@ function renderInicio() {
       ${kpi('clientes', 'Clientes activos', clientesActivos, 'compraron en los últimos 60 días', "ir('clientes')")}
       ${kpi('inventario', 'Frascos en stock', lista('productos').reduce((a, p) => a + Math.max(0, stockDe(p.id)), 0), bajos.length ? `<b style="color:var(--error)">${bajos.length} bajo el mínimo</b>` : 'todo sobre el mínimo', "ir('inventario')")}
     </div>
+    ${tarjetaResultado(activos)}
     <div class="grid g2">
       <div class="card"><h3>${ic('camion')} Entregas pendientes</h3>
         ${agenda.length ? `<div class="lista-hoy">${agenda.map(p => { const c = D.clientes.get(p.cliente_id); return `<div class="item">
@@ -791,6 +795,126 @@ function renderInicio() {
       <div class="card"><h3>Ventas del mes por canal</h3>${barras(Object.entries(canal), v => soles(v))}</div>
     </div>`;
 }
+
+// Resultado del mes: ventas → IGV → costos → canjes (publicidad) → costos fijos → utilidad neta.
+const COSTOS_FIJOS_BASE = 1137.60; // centro de costos
+const costosFijos = () => CFG.costos_fijos != null ? +CFG.costos_fijos : COSTOS_FIJOS_BASE;
+async function fijarCostosFijos(v) { CFG.costos_fijos = Math.max(0, r2(String(v).replace(',', '.'))); await guardarConfig(); renderInicio(); }
+function resultadoMes(activos, mes) {
+  const ps = activos.filter(p => p.fecha?.startsWith(mes));
+  const ventas = ps.filter(esVenta); const canjes = ps.filter(p => p.canje);
+  const R = ventas.map(rentabilidad); const RC = canjes.map(rentabilidad);
+  const sum = (arr, f) => r2(arr.reduce((a, x) => a + f(x), 0));
+  const o = {
+    ventas, canjes,
+    bruto: sum(ventas, p => +p.total || 0), igv: sum(ventas, p => +p.igv || 0),
+    costoProd: sum(R, r => r.costoProd), regalos: sum(R, r => r.costoRegalo), courier: sum(R, r => r.courier),
+    canjeProd: sum(RC, r => r.costoProd + r.costoRegalo), canjeCourier: sum(RC, r => r.courier),
+    fijos: costosFijos(),
+  };
+  o.sinIgv = r2(o.bruto - o.igv);
+  o.ganVentas = sum(R, r => r.ganancia);
+  o.publicidad = r2(o.canjeProd + o.canjeCourier);
+  o.costoTotal = r2(o.costoProd + o.regalos + o.courier + o.publicidad + o.fijos);
+  o.neta = r2(o.sinIgv - o.costoTotal);
+  o.margen = o.sinIgv > 0 ? o.neta / o.sinIgv * 100 : 0;
+  return o;
+}
+function tarjetaResultado(activos) {
+  const mes = UI.res.mes;
+  const meses = [...new Set([hoy().slice(0, 7), ...activos.map(p => String(p.fecha || '').slice(0, 7)).filter(Boolean)])].sort().reverse();
+  const o = resultadoMes(activos, mes);
+  const fila = (a, b, cls = '') => `<div class="fila-r ${cls}"><span>${a}</span><b class="num">${b}</b></div>`;
+  const menos = v => v ? '−' + soles(v) : soles(0);
+  return `<div class="card resultado" style="margin-bottom:16px">
+    <div class="res-cab"><h3>${ic('dinero')} Resultado del mes</h3>
+      <select onchange="UI.res.mes=this.value;renderInicio()">${meses.map(m => `<option value="${m}" ${m === mes ? 'selected' : ''}>${nombreMes(m)}</option>`).join('')}</select></div>
+    <div class="res-grid">
+      <div class="res-col">
+        ${fila(`Ventas cobradas o entregadas <small>(${plural(o.ventas.length, 'pedido')})</small>`, soles(o.bruto))}
+        ${fila('IGV por pagar <small>(ventas B2B con IGV)</small>', menos(o.igv), 'rojo')}
+        ${fila('<b>Venta sin IGV</b>', soles(o.sinIgv), 'sub')}
+        ${fila('Costo de mantequillas vendidas', menos(o.costoProd), 'rojo')}
+        ${o.regalos ? fila('Regalos del Club', menos(o.regalos), 'rojo') : ''}
+        ${o.courier ? fila('Courier que pagas', menos(o.courier), 'rojo') : ''}
+        ${fila('<b>Ganancia de las ventas</b>', soles(o.ganVentas), 'sub')}
+        ${fila(`${ic('camara')} Inversión en publicidad <small>(${plural(o.canjes.length, 'canje')}${o.canjeCourier ? `, incluye ${soles(o.canjeCourier)} de courier` : ''})</small>`, menos(o.publicidad), 'rojo')}
+        <div class="fila-r rojo"><span>Costos fijos del mes <small>(centro de costos)</small></span>
+          <span class="fijos-in">−S/ <input type="text" inputmode="decimal" value="${o.fijos}" onchange="fijarCostosFijos(this.value)" title="Cámbialo si tus costos fijos cambian"></span></div>
+      </div>
+      <div class="res-total">
+        <small>Costo total del mes</small><b class="num">${soles(o.costoTotal)}</b>
+        <small style="margin-top:12px">Utilidad neta</small><b class="num grande" style="color:${o.neta >= 0 ? 'var(--ok)' : 'var(--error)'}">${o.neta < 0 ? '−' : ''}${soles(Math.abs(o.neta))}</b>
+        <span class="margen-pill ${claseMargen(o.margen)}">${pct(o.margen)} de la venta sin IGV</span>
+        ${o.igv ? `<small style="margin-top:10px">Separa <b>${soles(o.igv)}</b> para el IGV.</small>` : ''}
+      </div>
+    </div>
+  </div>`;
+}
+
+// ==================================================================== HISTORIAL
+// Todo lo que pasó, en una sola lista: pedidos (compras, canjes, cancelados) y movimientos del Club
+// (sellos por compra, referidos, historias/reseñas, ajustes, regalos y cambios de nivel).
+const TIPOS_HIST = {
+  todo: 'Todo', compra: 'Compras', canje: 'Canjes', cancelado: 'Pedidos cancelados', sello: 'Sellos por compra', amigo: 'Referidos',
+  historia: 'Historias y reseñas', ajuste: 'Ajustes de sellos', regalo: 'Regalos (ganados y usados)', nivel: 'Cambios de nivel',
+};
+const ETQ_HIST = { compra: ['Compra', 'entregado'], canje: ['Canje', 'canje'], cancelado: ['Cancelado', 'anulado'], sello: ['Sello', 'pagado'], amigo: ['Referido', 'parcial'],
+  historia: ['Historia / reseña', 'b2c'], ajuste: ['Ajuste', 'pendiente'], regalo: ['Regalo', 'gratis'], nivel: ['Nivel', 'b2b'] };
+function historialTotal() {
+  const out = [];
+  for (const p of lista('pedidos')) {
+    const c = D.clientes.get(p.cliente_id);
+    const tipo = p.anulado ? 'cancelado' : p.canje ? 'canje' : 'compra';
+    const R = rentabilidad(p);
+    out.push({ fecha: String(p.fecha).slice(0, 10), orden: p.creado_en || '', tipo, cliente: c, pedido: p.id,
+      texto: `Pedido ${p.numero}${p.canal === 'b2b' ? ' (B2B)' : ''}`, detalle: resumenItems(p) + (p.canje && p.canje_publica ? `<br>Publica: ${h(p.canje_publica)}${p.canje_cumplido ? ' · ya publicó' : ' · <span class="falta">falta publicar</span>'}` : ''),
+      monto: p.anulado ? null : p.canje ? -(R.costo + R.courier) : +p.total || 0 });
+  }
+  for (const c of lista('clientes')) {
+    if (esEmpresa(c)) continue;
+    for (const f of historialSellos(c.id).filas) {
+      const tipo = f.hito === 'regalo' || f.hito === 'usado' ? 'regalo' : f.hito === 'nivel' ? 'nivel' : f.tipo === 'compra' ? 'sello' : f.tipo;
+      out.push({ fecha: String(f.fecha).slice(0, 10), orden: '', tipo, cliente: c, pedido: f.pedido || null, texto: f.texto, link: f.link,
+        n: f.hito ? null : f.n, total: f.hito ? null : f.total });
+    }
+  }
+  return out.sort((a, b) => b.fecha.localeCompare(a.fecha) || String(b.orden).localeCompare(String(a.orden)));
+}
+function renderHistorial() {
+  const f = UI.hist; const todo = historialTotal();
+  const meses = [...new Set([hoy().slice(0, 7), ...todo.map(x => x.fecha.slice(0, 7))])].sort().reverse();
+  let xs = todo.filter(x => !f.mes || x.fecha.startsWith(f.mes));
+  const cuenta = Object.fromEntries(Object.keys(TIPOS_HIST).map(k => [k, k === 'todo' ? xs.length : xs.filter(x => x.tipo === k).length]));
+  if (f.tipo !== 'todo') xs = xs.filter(x => x.tipo === f.tipo);
+  if (f.q) { const q = norm(f.q); xs = xs.filter(x => norm(`${nombreCliente(x.cliente)} ${x.cliente?.codigo} ${x.cliente?.celular} ${x.texto}`).includes(q)); }
+  const vis = xs.slice(0, f.ver);
+  $('#v-historial').innerHTML = `
+    <div class="cab-vista"><div><h2>Historial</h2><span class="suave">Todo en un solo lugar: compras, canjes, sellos, referidos, historias, regalos y niveles.</span></div></div>
+    <div class="card">
+      <div class="filtros">
+        <div class="campo"><label>Qué ver</label><select onchange="UI.hist.tipo=this.value;UI.hist.ver=150;renderHistorial()">
+          ${Object.entries(TIPOS_HIST).map(([k, t]) => `<option value="${k}" ${f.tipo === k ? 'selected' : ''}>${t} (${cuenta[k]})</option>`).join('')}</select></div>
+        <div class="campo"><label>Mes</label><select onchange="UI.hist.mes=this.value;UI.hist.ver=150;renderHistorial()">
+          <option value="">Todos los meses</option>${meses.map(m => `<option value="${m}" ${f.mes === m ? 'selected' : ''}>${nombreMes(m)}</option>`).join('')}</select></div>
+        <div class="campo buscar"><label>Buscar</label><input type="search" id="hist-q" placeholder="Cliente, código, celular, pedido…" value="${h(f.q)}" oninput="UI.hist.q=this.value;renderHistorialLuego()"></div>
+      </div>
+      <div class="barra-lista"><span><b>${plural(xs.length, 'movimiento')}</b></span></div>
+      <div class="tabla-wrap"><table class="tabla-hist">
+        <thead><tr><th>Fecha</th><th>Tipo</th><th>Cliente</th><th>Movimiento</th><th class="der">Monto</th><th class="der">Sellos</th></tr></thead>
+        <tbody>${vis.length ? vis.map(x => { const [et, cls] = ETQ_HIST[x.tipo] || [x.tipo, '']; const abrir = x.pedido ? `PF.abrir('${x.pedido}')` : x.cliente ? `CLI.abrir('${x.cliente.id}')` : '';
+          return `<tr class="${abrir ? 'clic' : ''}" ${abrir ? `onclick="${abrir}"` : ''}>
+            <td>${fechaCorta(x.fecha)}</td><td><span class="tag ${cls}">${et}</span></td>
+            <td>${x.cliente ? `<a href="#" onclick="event.stopPropagation();CLI.abrir('${x.cliente.id}');return false"><b>${h(nombreCliente(x.cliente))}</b></a>` : '—'}</td>
+            <td>${h(x.texto)}${x.detalle ? `<br><small>${x.detalle}</small>` : ''}${x.link ? ` <a href="${h(x.link)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">ver</a>` : ''}</td>
+            <td class="der num">${x.monto == null ? '<small class="suave">—</small>' : x.monto < 0 ? `<b class="m-medio-txt" title="Inversión en publicidad">−${soles(-x.monto)}</b>` : soles(x.monto)}</td>
+            <td class="der num">${x.n != null ? `<b style="color:${x.n < 0 ? 'var(--error)' : 'var(--ok)'}">${x.n > 0 ? '+' : ''}${x.n}</b> <small class="suave">(${x.total})</small>` : ''}</td></tr>`; }).join('')
+          : `<tr><td colspan="6" class="vacio">No hay movimientos con este filtro.</td></tr>`}</tbody></table></div>
+      ${xs.length > vis.length ? `<p style="text-align:center"><button class="btn" onclick="UI.hist.ver+=300;renderHistorial()">Ver más (${xs.length - vis.length})</button></p>` : ''}
+    </div>`;
+  if (typeof etiquetarTablas === 'function') etiquetarTablas($('#v-historial'));
+}
+let _tHist; function renderHistorialLuego() { clearTimeout(_tHist); _tHist = setTimeout(() => { renderHistorial(); const i = $('#hist-q'); i.focus(); i.setSelectionRange(i.value.length, i.value.length); }, 250); }
 
 // ==================================================================== PEDIDOS
 function resumenItems(p) {
