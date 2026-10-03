@@ -251,3 +251,105 @@ drop policy if exists "mrp vouchers cambiar" on storage.objects;
 create policy "mrp vouchers ver" on storage.objects for select to authenticated using (bucket_id = 'comprobantes' and (select privado.es_equipo()));
 create policy "mrp vouchers subir" on storage.objects for insert to authenticated with check (bucket_id = 'comprobantes' and (select privado.es_equipo()));
 create policy "mrp vouchers cambiar" on storage.objects for update to authenticated using (bucket_id = 'comprobantes' and (select privado.es_equipo()));
+
+-- ---------------------------------------------------------------------
+-- Catálogo de Meta: tabla especializada que lee la función catalogo-meta.
+-- Nadie la edita a mano: se rellena sola cada vez que se guarda un producto
+-- o un pack en el panel (precio, stock, textos, foto, galería y videos).
+-- Solo entran los marcados "en catálogo" (los packs además activos y con precio Oficial).
+-- ---------------------------------------------------------------------
+create table if not exists public.catalogo_meta (
+  id text primary key,                          -- mismo id del producto/pack = id del artículo en Meta
+  origen text not null,                         -- producto | pack
+  title text not null,
+  description text,
+  availability text not null,                   -- in stock | out of stock
+  condition text not null default 'new',
+  price text not null,                          -- "42.00 PEN"
+  link text not null,
+  image_link text,
+  additional_image_link text,                   -- hasta 20 fotos separadas por coma
+  video_1 text, video_2 text, video_3 text, video_4 text, video_5 text,
+  brand text not null default 'Mr. Peanut',
+  size text,
+  google_product_category text,
+  orden int default 0,
+  actualizado timestamptz not null default now()
+);
+alter table public.catalogo_meta enable row level security;
+drop policy if exists "equipo ve catalogo" on public.catalogo_meta;
+create policy "equipo ve catalogo" on public.catalogo_meta for select to authenticated using ((select privado.es_equipo()));
+
+create or replace function privado.catalogo_meta_fila(origen text, j jsonb)
+returns void
+language plpgsql security definer
+set search_path = ''
+as $$
+declare
+  link constant text := 'https://www.instagram.com/mr.peanutt.pe/';
+  categoria constant text := 'Food, Beverages & Tobacco > Food Items > Dips & Spreads > Nut Butters';
+  gramos constant int := 150;
+  es_pack boolean := origen = 'pack';
+  precio numeric := (j ->> case when es_pack then 'precio_oficial' else 'precio' end)::numeric;
+  fotos text;
+  vids text[];
+begin
+  if coalesce((j ->> 'eliminado')::boolean, false) or not coalesce((j ->> 'en_catalogo')::boolean, false)
+     or (es_pack and (not coalesce((j ->> 'activo')::boolean, true) or precio is null)) then
+    delete from public.catalogo_meta where id = j ->> 'id';
+    return;
+  end if;
+
+  -- Solo lo que ya está subido a internet (lo "por subir" todavía no tiene url).
+  select string_agg(u, ',' order by n) into fotos from (
+    select m ->> 'url' u, n from jsonb_array_elements(coalesce(j -> 'media', '[]')) with ordinality t(m, n)
+    where m ->> 'tipo' = 'imagen' and m ->> 'url' ~ '^https?:' order by n limit 20) s;
+  select array_agg(u order by n) into vids from (
+    select m ->> 'url' u, n from jsonb_array_elements(coalesce(j -> 'media', '[]')) with ordinality t(m, n)
+    where m ->> 'tipo' = 'video' and m ->> 'url' ~ '^https?:' order by n limit 5) s;
+
+  insert into public.catalogo_meta as c (id, origen, title, description, availability, condition, price, link, image_link,
+    additional_image_link, video_1, video_2, video_3, video_4, video_5, brand, size, google_product_category, orden, actualizado)
+  values (
+    j ->> 'id', origen, j ->> 'nombre', coalesce(nullif(j ->> 'descripcion', ''), j ->> 'nombre'),
+    case when es_pack or coalesce((j ->> 'disponible')::boolean, true) then 'in stock' else 'out of stock' end,
+    'new', to_char(precio, 'FM999990.00') || ' PEN', link, nullif(j ->> 'imagen_url', ''),
+    fotos, vids[1], vids[2], vids[3], vids[4], vids[5], 'Mr. Peanut',
+    case when es_pack then (j ->> 'frascos') || ' x ' || gramos || ' g' else gramos || ' g' end,
+    categoria, coalesce((j ->> 'orden')::int, 0) + case when es_pack then 1000 else 0 end, now())
+  on conflict (id) do update set
+    origen = excluded.origen, title = excluded.title, description = excluded.description, availability = excluded.availability,
+    condition = excluded.condition, price = excluded.price, link = excluded.link, image_link = excluded.image_link,
+    additional_image_link = excluded.additional_image_link, video_1 = excluded.video_1, video_2 = excluded.video_2,
+    video_3 = excluded.video_3, video_4 = excluded.video_4, video_5 = excluded.video_5, brand = excluded.brand,
+    size = excluded.size, google_product_category = excluded.google_product_category, orden = excluded.orden,
+    actualizado = excluded.actualizado;
+end $$;
+revoke all on function privado.catalogo_meta_fila(text, jsonb) from public, anon, authenticated;
+
+create or replace function privado.catalogo_meta_sync()
+returns trigger
+language plpgsql security definer
+set search_path = ''
+as $$
+begin
+  if tg_op <> 'INSERT' and (tg_op = 'DELETE' or old.id <> new.id) then
+    delete from public.catalogo_meta where id = old.id;
+  end if;
+  if tg_op <> 'DELETE' then
+    perform privado.catalogo_meta_fila(case when tg_table_name = 'packs' then 'pack' else 'producto' end, to_jsonb(new));
+  end if;
+  return null;
+end $$;
+revoke all on function privado.catalogo_meta_sync() from public, anon, authenticated;
+
+drop trigger if exists catalogo_meta on public.productos;
+create trigger catalogo_meta after insert or update or delete on public.productos
+  for each row execute function privado.catalogo_meta_sync();
+drop trigger if exists catalogo_meta on public.packs;
+create trigger catalogo_meta after insert or update or delete on public.packs
+  for each row execute function privado.catalogo_meta_sync();
+
+-- Rellenar con lo que ya existe (se puede correr varias veces).
+select privado.catalogo_meta_fila('producto', to_jsonb(p)) from public.productos p;
+select privado.catalogo_meta_fila('pack', to_jsonb(p)) from public.packs p;
