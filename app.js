@@ -2566,9 +2566,7 @@ const CLUBV = {
 
 // ==================================================================== PRODUCTOS Y PROMOCIONES
 function urlFeed() {
-  if (!CFG.supabase?.url) return '';
-  const wa = soloDigitos(CFG.whatsapp);
-  return `${CFG.supabase.url}/functions/v1/catalogo-meta${wa ? `?wa=${wa}` : ''}`;
+  return CFG.supabase?.url ? `${CFG.supabase.url}/functions/v1/catalogo-meta` : '';
 }
 function renderProductos() {
   const ps = lista('productos').sort((a, b) => (a.orden || 0) - (b.orden || 0));
@@ -2608,12 +2606,11 @@ function renderProductos() {
         <p style="margin-top:0"><b>Link del catálogo (fuente de datos programada)</b></p>
         ${feed ? `<div class="fila"><span class="codigo" style="flex:1">${h(feed)}</span><button class="btn mini" onclick="copiar('${h(feed)}')">Copiar</button><a class="btn mini" href="${h(feed)}" target="_blank" rel="noopener">Probar</a></div>`
           : `<div class="aviso alerta">Aparece aquí cuando conectes Supabase en <a href="#" onclick="ir('ajustes');return false">Sincronización</a>. Mientras tanto puedes subir el CSV a mano.</div>`}
-        ${soloDigitos(CFG.whatsapp) ? '' : `<div class="aviso alerta" style="margin-top:8px">Falta el número de WhatsApp del negocio (en Sincronización): Meta necesita un link por producto y usamos el de WhatsApp.</div>`}
         <ol style="padding-left:20px;margin-bottom:0">
           <li>Meta Business Suite → <b>Commerce Manager</b> → tu catálogo → <b>Orígenes de datos</b>.</li>
           <li><b>Agregar artículos → Fuente de datos → Programada</b> y pega el link.</li>
           <li>Frecuencia: <b>cada hora</b>. Moneda: <b>PEN</b>.</li>
-          <li>Cuando edites un producto aquí y se sincronice, Meta lo toma en su siguiente lectura.</li>
+          <li>Cuando guardes un producto o pack aquí y se sincronice, se actualiza solo en el catálogo y Meta lo toma en su siguiente lectura (o en Commerce Manager → <b>Actualizar ahora</b>).</li>
         </ol>
       </div>
       <div class="card">
@@ -2636,24 +2633,27 @@ function mediaMeta(r) {
   ms.filter(m => m.tipo === 'video').slice(0, MAX_VIDEOS_META).forEach((m, i) => { out[`video[${i}].url`] = m.url; });
   return out;
 }
+// Igual que la tabla catalogo_meta de Supabase (privado.catalogo_meta_fila en schema.sql): si cambias uno, cambia el otro.
+const LINK_META = 'https://www.instagram.com/mr.peanutt.pe/';
+const CATEGORIA_META = 'Food, Beverages & Tobacco > Food Items > Dips & Spreads > Nut Butters';
+const GRAMOS_FRASCO = 150;
 function filasMeta() {
-  const wa = soloDigitos(CFG.whatsapp);
-  const link = nombre => wa ? waLink(wa, `Hola Mr. Peanut, quiero: ${nombre}`) : '';
+  const comun = { condition: 'new', link: LINK_META, brand: 'Mr. Peanut', google_product_category: CATEGORIA_META };
   const out = [];
   lista('productos').filter(p => p.en_catalogo).sort((a, b) => (a.orden || 0) - (b.orden || 0)).forEach(p => out.push({
-    id: p.id, title: p.nombre, description: p.descripcion || p.nombre, availability: p.disponible !== false ? 'in stock' : 'out of stock',
-    condition: 'new', price: `${(+p.precio).toFixed(2)} PEN`, link: link(p.nombre), image_link: p.imagen_url || '', brand: 'Mr. Peanut', ...mediaMeta(p),
+    ...comun, id: p.id, title: p.nombre, description: p.descripcion || p.nombre, availability: p.disponible !== false ? 'in stock' : 'out of stock',
+    price: `${(+p.precio).toFixed(2)} PEN`, image_link: p.imagen_url || '', size: `${GRAMOS_FRASCO} g`, ...mediaMeta(p),
   }));
   lista('packs').filter(p => p.en_catalogo && p.activo !== false && precioPack(p, 'oficial') != null).sort((a, b) => (a.orden || 0) - (b.orden || 0)).forEach(p => out.push({
-    id: p.id, title: p.nombre, description: p.descripcion || p.nombre, availability: 'in stock',
-    condition: 'new', price: `${precioPack(p, 'oficial').toFixed(2)} PEN`, link: link(p.nombre), image_link: p.imagen_url || '', brand: 'Mr. Peanut', ...mediaMeta(p),
+    ...comun, id: p.id, title: p.nombre, description: p.descripcion || p.nombre, availability: 'in stock',
+    price: `${precioPack(p, 'oficial').toFixed(2)} PEN`, image_link: p.imagen_url || '', size: `${p.frascos} x ${GRAMOS_FRASCO} g`, ...mediaMeta(p),
   }));
   return out;
 }
 const csvMeta = () => {
   const filas = filasMeta();
   const nVid = Math.max(0, ...filas.map(f => Object.keys(f).filter(k => k.startsWith('video[')).length));
-  const cols = ['id', 'title', 'description', 'availability', 'condition', 'price', 'link', 'image_link', 'additional_image_link', 'brand', ...Array.from({ length: nVid }, (_, i) => `video[${i}].url`)];
+  const cols = ['id', 'title', 'description', 'availability', 'condition', 'price', 'link', 'image_link', 'additional_image_link', 'brand', 'size', 'google_product_category', ...Array.from({ length: nVid }, (_, i) => `video[${i}].url`)];
   return aCSV([cols, ...filas.map(f => cols.map(c => f[c] ?? ''))]);
 };
 
