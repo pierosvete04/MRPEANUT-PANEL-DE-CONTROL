@@ -5,12 +5,15 @@
 //
 // Publicar:  supabase functions deploy catalogo-meta --no-verify-jwt
 // Link:      https://<proyecto>.supabase.co/functions/v1/catalogo-meta?wa=51987654321
-//            (wa = WhatsApp del negocio; se usa como link de cada producto)
+//            (wa = WhatsApp del negocio; se usa como link de cada producto. Sin wa → perfil de Instagram)
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 
 const MAX_FOTOS = 20;
 const MAX_VIDEOS = 5;
-const BASE = ['id', 'title', 'description', 'availability', 'condition', 'price', 'link', 'image_link', 'additional_image_link', 'brand'];
+const BASE = ['id', 'title', 'description', 'availability', 'condition', 'price', 'link', 'image_link', 'additional_image_link', 'brand', 'size', 'google_product_category'];
+const INSTAGRAM = 'https://www.instagram.com/mr.peanutt.pe/';
+const CATEGORIA = 'Food, Beverages & Tobacco > Food Items > Dips & Spreads > Nut Butters';
+const GRAMOS = 150;
 
 type Media = { tipo?: string; url?: string };
 type Fila = Record<string, string>;
@@ -32,7 +35,7 @@ Deno.serve(async (req) => {
   const url = new URL(req.url);
   const wa = (url.searchParams.get('wa') ?? '').replace(/\D/g, '');
   const link = (nombre: string) =>
-    wa ? `https://wa.me/${wa}?text=${encodeURIComponent(`Hola Mr. Peanut, quiero: ${nombre}`)}` : 'https://www.instagram.com/';
+    wa ? `https://wa.me/${wa}?text=${encodeURIComponent(`Hola Mr. Peanut, quiero: ${nombre}`)}` : INSTAGRAM;
 
   // La service role solo existe dentro de Supabase; nunca sale de esta función.
   const sb = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
@@ -50,12 +53,14 @@ Deno.serve(async (req) => {
       id: p.id, title: p.nombre, description: p.descripcion || p.nombre,
       availability: p.disponible ? 'in stock' : 'out of stock', condition: 'new',
       price: `${Number(p.precio).toFixed(2)} PEN`, link: link(p.nombre), image_link: p.imagen_url ?? '', brand: 'Mr. Peanut',
+      size: `${GRAMOS} g`, google_product_category: CATEGORIA,
       ...galeria(p.media),
     })),
     ...(packs.data ?? []).map((p) => ({
       id: p.id, title: p.nombre, description: p.descripcion || p.nombre,
       availability: 'in stock', condition: 'new',
       price: `${Number(p.precio_oficial).toFixed(2)} PEN`, link: link(p.nombre), image_link: p.imagen_url ?? '', brand: 'Mr. Peanut',
+      size: `${p.frascos} x ${GRAMOS} g`, google_product_category: CATEGORIA,
       ...galeria(p.media),
     })),
   ];
