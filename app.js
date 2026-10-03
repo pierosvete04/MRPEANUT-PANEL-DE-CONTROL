@@ -954,6 +954,8 @@ function tagPago(p) {
 }
 // Columna Pago de la lista: una lista para marcarlo pagado (con el método) o volverlo a pendiente sin abrir el pedido.
 function celdaPago(p) {
+  if (p.canje && !p.anulado) return `<select class="sel-estado sel-pago p-${p.canje_cumplido ? 'pagado' : 'pendiente'}" onclick="event.stopPropagation()" onchange="PED.publico('${p.id}',this.value==='si')" aria-label="Publicación del canje" title="${h(p.canje_publica ? 'Lo acordado: ' + p.canje_publica : 'Marca cuando ya publicó')}">
+      <option value="no" ${p.canje_cumplido ? '' : 'selected'}>Canje · falta publicar</option><option value="si" ${p.canje_cumplido ? 'selected' : ''}>Canje · ya publicó</option></select>`;
   if (p.anulado || p.canje || !(+p.total > 0)) return tagPago(p);
   const ep = estadoPago(p); const sal = saldoDe(p);
   const sub = p.modalidad_pago === 'contra_entrega' ? 'contra entrega' : p.modalidad_pago === 'credito' ? `vence ${fechaCorta(p.fecha_vencimiento)}` : '';
@@ -1125,6 +1127,14 @@ const PED = {
     await guardar('pedidos', p);
     toast(valor === 'pendiente' ? `${p.numero}: pendiente de pago.` : `${p.numero}: pagado con ${valor}${p.estado_entrega === 'entregado' ? '' : ' · falta entregarlo'}.`);
     anunciarSnaps(snaps);
+    render();
+  },
+  // Canje: marca si el influencer ya publicó lo acordado (o lo vuelve a "falta publicar").
+  async publico(id, si) {
+    const p = D.pedidos.get(id); if (!p || !p.canje) return;
+    p.canje_cumplido = si;
+    await guardar('pedidos', p);
+    toast(si ? `${p.numero}: canje cumplido, ya publicó.` : `${p.numero}: canje pendiente de publicar.`);
     render();
   },
   async eliminar(id) { if (await eliminarPedido(D.pedidos.get(id))) render(); },
