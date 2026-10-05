@@ -69,12 +69,12 @@ const PRODUCTOS_INICIALES = [
 ];
 const txtPack = (n, max) => `Elige ${n} mantequillas del catálogo (Maní, Chocomaní, Crunchy o Almendra) a precio de pack. Puedes repetir sabor. Máximo ${max} de almendra. Frascos de vidrio de 150 g. Precio de promoción del mes, no acumulable con otras promociones.`;
 const PACKS_INICIALES = [
-  { id: 'PACK-2', nombre: 'Arma tu Pack x2', frascos: 2, tipo: 'mixto', max_almendra: 1, precio_oficial: 42, precio_vip: 38, precio_leyenda: 35, orden: 1, en_catalogo: true, descripcion: txtPack(2, 1) },
-  { id: 'PACK-3', nombre: 'Arma tu Pack x3', frascos: 3, tipo: 'mixto', max_almendra: 1, precio_oficial: 51, precio_vip: 48, precio_leyenda: 45, orden: 2, en_catalogo: true, descripcion: txtPack(3, 1) },
-  { id: 'PACK-4', nombre: 'Arma tu Pack x4', frascos: 4, tipo: 'mixto', max_almendra: 2, precio_oficial: 64, precio_vip: 62, precio_leyenda: 60, orden: 3, en_catalogo: true, descripcion: txtPack(4, 2) },
-  { id: 'PACK-5', nombre: 'Arma tu Pack x5', frascos: 5, tipo: 'mixto', max_almendra: 2, precio_oficial: null, precio_vip: 78, precio_leyenda: 75, orden: 4, en_catalogo: false, descripcion: txtPack(5, 2) + ' Exclusivo para clientes VIP y Leyenda.' },
-  { id: 'PACK-ALM-2', nombre: 'Pack Almendra x2', frascos: 2, tipo: 'almendra', max_almendra: 2, precio_oficial: 46, precio_vip: 44, precio_leyenda: 42, orden: 5, en_catalogo: true, descripcion: '2 mantequillas de almendra de 150 g a precio de pack. No acumulable con otras promociones.' },
-  { id: 'PACK-ALM-4', nombre: 'Pack Almendra x4', frascos: 4, tipo: 'almendra', max_almendra: 4, precio_oficial: 88, precio_vip: 84, precio_leyenda: 80, orden: 6, en_catalogo: true, descripcion: '4 mantequillas de almendra de 150 g a precio de pack. Para no quedarte sin tu favorita. No acumulable con otras promociones.' },
+  { id: 'PACK-2', nombre: '2 Mantequillas a elección', frascos: 2, tipo: 'mixto', max_almendra: 1, precio_oficial: 42, precio_vip: 38, precio_leyenda: 35, orden: 1, en_catalogo: true, descripcion: txtPack(2, 1) },
+  { id: 'PACK-3', nombre: '3 Mantequillas a elección', frascos: 3, tipo: 'mixto', max_almendra: 1, precio_oficial: 51, precio_vip: 48, precio_leyenda: 45, orden: 2, en_catalogo: true, descripcion: txtPack(3, 1) },
+  { id: 'PACK-4', nombre: '4 Mantequillas a elección', frascos: 4, tipo: 'mixto', max_almendra: 2, precio_oficial: 64, precio_vip: 62, precio_leyenda: 60, orden: 3, en_catalogo: true, descripcion: txtPack(4, 2) },
+  { id: 'PACK-5', nombre: '5 Mantequillas a elección', frascos: 5, tipo: 'mixto', max_almendra: 2, precio_oficial: null, precio_vip: 78, precio_leyenda: 75, orden: 4, en_catalogo: false, descripcion: txtPack(5, 2) + ' Exclusivo para clientes VIP y Leyenda.' },
+  { id: 'PACK-ALM-2', nombre: '2 Mantequillas de Almendra', frascos: 2, tipo: 'almendra', max_almendra: 2, precio_oficial: 46, precio_vip: 44, precio_leyenda: 42, orden: 5, en_catalogo: true, descripcion: '2 mantequillas de almendra de 150 g a precio de pack. No acumulable con otras promociones.' },
+  { id: 'PACK-ALM-4', nombre: '4 Mantequillas de Almendra', frascos: 4, tipo: 'almendra', max_almendra: 4, precio_oficial: 88, precio_vip: 84, precio_leyenda: 80, orden: 6, en_catalogo: true, descripcion: '4 mantequillas de almendra de 150 g a precio de pack. Para no quedarte sin tu favorita. No acumulable con otras promociones.' },
 ];
 
 // Proyecto de Supabase del negocio (la clave publicable es pública; los datos los protege RLS + tabla equipo).
@@ -1471,7 +1471,7 @@ const PF = {
   sabor(i, s, d) {
     const it = F.packs[i]; const suma = Object.values(it.sabores).reduce((a, b) => a + b, 0);
     if (d > 0 && suma >= it.frascos) return toast(`Este pack ya tiene sus ${it.frascos} mantequillas. Baja otro sabor primero.`);
-    if (d > 0 && s === 'almendra' && (it.sabores.almendra || 0) >= it.max_almendra) return toast(`Máximo ${it.max_almendra} de almendra en este pack. Si quiere más, usa un Pack Almendra.`);
+    if (d > 0 && s === 'almendra' && (it.sabores.almendra || 0) >= it.max_almendra) return toast(`Máximo ${it.max_almendra} de almendra en este pack. Si quiere más, usa 2 o 4 Mantequillas de Almendra.`);
     it.sabores[s] = Math.max(0, (it.sabores[s] || 0) + d);
     PF.pintarItems(); PF.pintarResumen();
   },
