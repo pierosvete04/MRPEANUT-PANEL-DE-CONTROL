@@ -267,6 +267,34 @@ async function iniciarDatos() {
   for (const p of [...D.pedidos.values()]) if (migrarPedido(p)) { p._demo ? await idb.put('pedidos', p) : await guardar('pedidos', p); }
 }
 
+// Fotos nuevas (etiquetas oficiales con fondo, octubre 2026): foto principal + lado de la ilustración + Mr. Peanut comiendo.
+// Se cargan una vez desde img/productos, DESPUÉS de bajar los datos de Supabase (para no pisar productos con datos viejos),
+// y se suben solas (y de ahí al catálogo de Meta).
+// Los ids de la galería son fijos para que otra PC no las duplique.
+async function migrarFotosV2() {
+  if (CFG.fotos_v2 || location.protocol === 'file:') return false;
+  try {
+    for (const p of [...D.productos.values()].filter(x => !x._demo && !x.eliminado && ['mani', 'crunchy', 'almendra', 'chocomani'].includes(x.sabor))) {
+      const ms = p.media ||= [];
+      if (ms.some(m => m.id === `fv2-${p.sabor}-lado`)) continue; // ya lo hizo otra PC
+      const extras = [];
+      for (const tipo of ['lado', 'comiendo']) {
+        const resp = await fetch(`img/productos/${p.sabor}-${tipo}.jpg`); if (!resp.ok) throw new Error('foto no encontrada');
+        extras.push({ id: `fv2-${p.sabor}-${tipo}`, blob: await resp.blob() });
+      }
+      await idb.del('imagenes', `productos/${p.id}`); delete IMG[`productos/${p.id}`];
+      p.imagen_local = `img/productos/${p.sabor}.jpg`; p._img_pendiente = true;
+      for (const x of extras) {
+        await idb.put('imagenes', { clave: `media/${x.id}`, blob: x.blob }); IMG[`media/${x.id}`] = URL.createObjectURL(x.blob);
+        ms.unshift({ id: x.id, tipo: 'imagen', ext: 'jpg', nombre: `${p.sabor}-${x.id.split('-').pop()}.jpg`, _pendiente: true });
+      }
+      ms.sort((a, b) => (a.id === `fv2-${p.sabor}-lado` ? -1 : b.id === `fv2-${p.sabor}-lado` ? 1 : 0));
+      await guardar('productos', p);
+    }
+    CFG.fotos_v2 = true; await guardarConfig(); return true;
+  } catch { return false; /* sin las fotos a mano: se reintenta en la próxima sincronización */ }
+}
+
 const fotoDe = (tabla, r) => IMG[`${tabla}/${r.id}`] || r.imagen_url || r.imagen_local || 'img/productos/pack.jpg';
 const productoDeSabor = sabor => lista('productos').find(p => p.sabor === sabor);
 const precioSuelto = sabor => +(productoDeSabor(sabor)?.precio || 0);
@@ -3025,6 +3053,10 @@ async function sincronizar(manual) {
     try { await subirFotos(); await subirMedia(); await subirVouchers(); await subirCola(); }
     catch (e) { avisoFotos = e.message || String(e); }
     const bajados = await bajarCambios();
+    if (!CFG.fotos_v2 && await migrarFotosV2()) {
+      try { await subirCola(); await subirFotos(); await subirMedia(); await subirCola(); }
+      catch (e) { avisoFotos = e.message || String(e); }
+    }
     if (avisoFotos && manual) toast('Datos sincronizados. Algunas fotos quedaron pendientes: ' + avisoFotos, 6000);
     CFG.ultima_sync = new Date().toISOString(); await guardarConfig();
     ultimoError = null;

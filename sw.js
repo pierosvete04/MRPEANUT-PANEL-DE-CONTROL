@@ -1,11 +1,12 @@
 // Service worker: guarda la app en la PC para que abra sin internet.
 // Sube VERSION cada vez que cambies archivos del panel.
-const VERSION = 'mrp-panel-v19';
+const VERSION = 'mrp-panel-v20';
 const ARCHIVOS = [
   './', './index.html', './app.js', './styles.css', './manifest.webmanifest',
   './img/logo.png', './img/sello.png', './img/icono-192.png', './img/icono-512.png',
   './img/productos/mani.jpg', './img/productos/almendra.jpg', './img/productos/chocomani.jpg',
   './img/productos/crunchy.jpg', './img/productos/pack.jpg',
+  ...['mani', 'almendra', 'chocomani', 'crunchy'].flatMap(s => [`./img/productos/${s}-lado.jpg`, `./img/productos/${s}-comiendo.jpg`]),
   './fonts/TitanOne-Regular.ttf', './fonts/Nunito.ttf', './fonts/GochiHand-Regular.ttf', './img/patron.png', './img/favicon-32.png',
 ];
 
