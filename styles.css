@@ -364,6 +364,12 @@ button.kpi { font: inherit; color: inherit; text-align: left; width: 100%; }
 .num-ped { white-space: nowrap; font-weight: 900; text-decoration: none; color: var(--texto); font-variant-numeric: tabular-nums; }
 .num-ped:hover { color: var(--caramelo); text-decoration: underline; }
 .tabla-ped td.det { max-width: 300px; font-size: 14.5px; }
+.fechas-celda { display: grid; grid-template-columns: auto auto; gap: 1px 8px; align-items: baseline; font-size: 14px; white-space: nowrap; }
+.fechas-celda small { color: #8a7a5c; font-size: 11.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .03em; }
+.fechas-celda em { font-style: normal; font-size: 12.5px; color: #8a7a5c; }
+.fechas-celda .ok-txt { color: var(--ok); font-weight: 700; }
+.fechas-celda .toca { color: var(--caramelo); font-weight: 800; background: var(--alerta-bg); border-radius: 6px; padding: 0 4px; margin: 0 -4px; }
+.fechas-celda .toca em { color: var(--caramelo); }
 tr.anulada td { opacity: .55; }
 .tag.gratis { background: var(--ok-bg); color: var(--ok); }
 .vacio-caja { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 10px 0; }

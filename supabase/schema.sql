@@ -57,6 +57,7 @@ create table if not exists public.clientes (
   referencia text,
   referido_por uuid,                           -- cliente que lo refirió
   nivel_manual text,                           -- null = automático por sellos
+  recompra_dias integer,                       -- recordar su siguiente pedido cada N días; null = automático, 0 = no recordar
   notas text,
   creado_en timestamptz default now(),
   updated_at timestamptz not null default now(),

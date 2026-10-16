@@ -48,9 +48,14 @@ crédito vencido) e inventario por lotes. Todo queda con la etiqueta *prueba*, s
 
 - **Pago** (se calcula solo con los pagos registrados): Pendiente → Parcial → Pagado. Modalidad: *Paga antes*, *Contra entrega* o *Crédito* (solo B2B, con fecha de vencimiento).
 - **Estado** (lista desplegable en la tabla y arriba del pedido, se guarda al elegir): Por preparar → Listo para enviar → En camino → Entregado, o **Cancelado**.
+- **Al entrar a Pedidos** se ven todos los pedidos del mes, sin filtros: B2C y B2B, en cualquier estado (también canjes entregados que falta publicar). La lista muestra el monto, no el detalle de mantequillas (está dentro del pedido).
+- **Columna Fechas** (en la lista): fecha del pedido, fecha de entrega (✓ si ya se entregó, la programada si no) y, en el último pedido de cada cliente, la fecha de su **siguiente pedido**.
+- **Siguiente pedido** = último pedido + cada cuánto compra. Se elige en la ficha del cliente (*Recordarme su siguiente pedido*: cada 2 o 3 semanas, cada mes… o no recordar). En automático usa su propio ritmo si ya compró 2+ veces; si no, la *frecuencia esperada* de Análisis (30 días).
+- Cuando llega esa fecha (y su último pedido ya se entregó) sale el aviso **Escribirle a…** en la campana y en Inicio, con un mensaje de WhatsApp listo. El filtro **Toca escribirle** muestra a todos.
 - **Eliminar pedido**: lo borra y se recalculan solos los sellos, el regalo usado, el referido y el stock.
 - Toda la fila de la tabla (pedidos y clientes) abre el detalle.
-- **Voucher obligatorio** para Yape, Plin, transferencia y tarjeta; el efectivo va sin voucher.
+- **Voucher opcional**: puedes adjuntar la captura del pago (Yape, Plin, transferencia, tarjeta) o registrar el pago sin ella.
+- **Celular**: puedes pegarlo tal cual desde WhatsApp (“+51 987 654 321”); se guarda solo con los 9 dígitos. También sirve pegado en los buscadores.
 - B2B: los precios se escriben en cada pedido **con IGV** y el panel desglosa op. gravada e IGV. Para registrar una factura la empresa necesita RUC.
 
 ## Mensajes de WhatsApp según la etapa

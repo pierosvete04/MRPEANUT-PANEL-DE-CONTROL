@@ -84,7 +84,7 @@ const SUPABASE_PROYECTO = { url: 'https://ymvfbpckxegnssvjsrzt.supabase.co', ano
 const COLUMNAS = {
   productos: ['id', 'nombre', 'sabor', 'descripcion', 'precio', 'costo', 'disponible', 'en_catalogo', 'imagen_url', 'media', 'orden', 'creado_en', 'updated_at', 'eliminado'],
   packs: ['id', 'nombre', 'frascos', 'tipo', 'max_almendra', 'precio_oficial', 'precio_vip', 'precio_leyenda', 'descripcion', 'activo', 'en_catalogo', 'imagen_url', 'media', 'orden', 'creado_en', 'updated_at', 'eliminado'],
-  clientes: ['id', 'tipo_cliente', 'codigo', 'nombre', 'apellido', 'razon_social', 'ruc', 'contacto', 'tipo_negocio', 'celular', 'correo', 'regalo_agendado', 'direccion', 'distrito', 'direccion_envio', 'referencia', 'referido_por', 'nivel_manual', 'notas', 'creado_en', 'updated_at', 'eliminado'],
+  clientes: ['id', 'tipo_cliente', 'codigo', 'nombre', 'apellido', 'razon_social', 'ruc', 'contacto', 'tipo_negocio', 'celular', 'correo', 'regalo_agendado', 'direccion', 'distrito', 'direccion_envio', 'referencia', 'referido_por', 'nivel_manual', 'recompra_dias', 'notas', 'creado_en', 'updated_at', 'eliminado'],
   pedidos: ['id', 'numero', 'canal', 'cliente_id', 'fecha', 'fecha_entrega', 'estado_entrega', 'estado_pago', 'anulado', 'modalidad_pago', 'fecha_vencimiento', 'nivel_precio', 'items', 'subtotal', 'descuento', 'descuento_referido', 'descuento_motivo', 'descuento_pct', 'canje', 'canje_publica', 'canje_cumplido', 'envio', 'envio_asumido', 'costo', 'igv', 'total', 'pagos', 'metodo_pago', 'courier', 'comprobante', 'guia', 'direccion_envio', 'referido_por', 'notas', 'entregado_en', 'creado_en', 'updated_at', 'eliminado'],
   sellos_extra: ['id', 'cliente_id', 'tipo', 'cantidad', 'pedido_id', 'red', 'link', 'nota', 'fecha', 'creado_en', 'updated_at', 'eliminado'],
   movimientos_stock: ['id', 'producto_id', 'tipo', 'cantidad', 'lote', 'fecha', 'vence', 'motivo', 'nota', 'creado_en', 'updated_at', 'eliminado'],
@@ -101,6 +101,14 @@ const norm = s => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLow
 const nombrePropio = s => String(s || '').trim().replace(/\s+/g, ' ').toLocaleLowerCase('es').replace(/(^|[\s'-])(\p{L})/gu, (m, a, b) => a + b.toLocaleUpperCase('es'));
 const soloDigitos = s => String(s || '').replace(/\D/g, '');
 const celNorm = s => soloDigitos(s).slice(-9);
+// Celular pegado desde WhatsApp ("+51 987 654 321", con espacios, guiones o caracteres invisibles) -> "987654321".
+// Devuelve null si no parece un celular (así un RUC de 11 dígitos o un nombre no se tocan).
+const limpiarCel = v => {
+  const s = String(v ?? '').trim(); const d = soloDigitos(s);
+  if (!d || !/^[\s\d+().\- ​-‏‪-‮⁦-⁩]+$/.test(s)) return null;
+  return d.length === 9 ? d : d.length === 11 && d.startsWith('51') ? d.slice(2) : null;
+};
+const celInput = v => limpiarCel(v) ?? v;
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() :
   'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => { const r = Math.random() * 16 | 0; return (c === 'x' ? r : (r & 3 | 8)).toString(16); }));
 const isoLocal = d => new Date(d - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
@@ -357,9 +365,8 @@ function estadoPago(p) {
 const esVenta = p => !p.anulado && !p.eliminado && !p.canje && (pagadoDe(p) > 0 || p.estado_entrega === 'entregado');
 const vencido = p => p.modalidad_pago === 'credito' && saldoDe(p) > 0 && p.fecha_vencimiento && p.fecha_vencimiento < hoy();
 const metodosDe = p => [...new Set((p.pagos || []).map(x => x.metodo))].join(' + ');
-// El voucher es obligatorio cuando el cliente paga antes (o a crédito) con Yape, Plin, transferencia o tarjeta.
-// En contra entrega y en efectivo es opcional.
-const pideVoucher = (modalidad, metodo) => modalidad !== 'contra_entrega' && metodo !== 'Efectivo';
+// El voucher siempre es opcional: se puede registrar un pago sin adjuntar la captura.
+const pideVoucher = () => false;
 async function guardarFotoPago(x, file) {
   const blob = await redimensionar(file, 1400);
   await idb.put('imagenes', { clave: `pagos/${x.id}`, blob });
@@ -537,6 +544,8 @@ const duenoCodigo = (cod, excluirId) => [...D.clientes.values()].find(c => c.id 
 function buscarClientes(q, limite = 8, tipo = null) {
   const t = norm(q); const d = soloDigitos(q);
   if (!t) return [];
+  const cel = limpiarCel(q);
+  if (cel) return lista('clientes').filter(c => (!tipo || (c.tipo_cliente || 'persona') === tipo) && celNorm(c.celular) === cel).slice(0, limite);
   return lista('clientes').filter(c => (!tipo || (c.tipo_cliente || 'persona') === tipo) && (() => {
     const txt = norm(`${c.nombre} ${c.apellido} ${c.codigo} ${c.distrito} ${c.razon_social} ${c.contacto} ${c.ruc} ${c.correo}`);
     return t.split(/\s+/).every(p => txt.includes(p)) || (d.length >= 3 && (soloDigitos(c.celular).includes(d) || soloDigitos(c.ruc).includes(d)));
@@ -567,9 +576,11 @@ function volver() {
 const cabPagina = (t, extra = '') => `<div class="modal-cab"><button class="btn mini" onclick="volver()">← Volver</button><h2>${t}</h2>${extra}</div>`;
 
 // ------------------------------------------------------------------ navegación
+// Al entrar a Pedidos se ve todo lo del mes (B2C y B2B, cualquier estado), sin filtros.
+const PED_BASE = () => ({ filtro: 'todos', canal: 'todos', q: '', mes: hoy().slice(0, 7) });
 const UI = {
   vista: 'inicio',
-  ped: { filtro: 'atender', canal: 'todos', q: '', mes: hoy().slice(0, 7) },
+  ped: PED_BASE(),
   cli: { q: '', nivel: 'todos', tipo: 'persona', orden: 'reciente' },
   club: 'resumen', ajustes: 'conexion',
   hist: { tipo: 'todo', mes: hoy().slice(0, 7), q: '', ver: 150 }, res: { mes: hoy().slice(0, 7) },
@@ -714,8 +725,30 @@ No olvides etiquetarnos para compartirlo. ¡Muchas gracias!` },
 
 // ==================================================================== NOTIFICACIONES
 // Se calculan de los datos (no se guardan): regalos ganados, entregas de hoy, créditos vencidos y stock bajo.
+// Siguiente pedido estimado = último pedido del cliente + cada cuántos días compra.
+// "Cada cuánto": lo fijado en su ficha, si no su propio ritmo (2+ compras), si no la frecuencia esperada de Análisis.
+const RECOMPRA_OPC = [[14, 'Cada 2 semanas'], [21, 'Cada 3 semanas'], [30, 'Cada mes'], [45, 'Cada mes y medio'], [60, 'Cada 2 meses']];
+const ultimoPedidoDe = cid => lista('pedidos').filter(p => p.cliente_id === cid && !p.anulado).sort((a, b) => (b.fecha + (b.numero || '')).localeCompare(a.fecha + (a.numero || '')))[0] || null;
+function proximoPedido(cid) {
+  const c = D.clientes.get(cid); const ult = ultimoPedidoDe(cid);
+  if (!c || c.eliminado || !ult || c.recompra_dias === 0) return null;
+  const e = statsDe(cid);
+  const cada = c.recompra_dias || e?.frecuencia || variablesAnalisis().frecuencia;
+  const fecha = sumarDias(ult.fecha, cada);
+  return { fecha, cada, ultimo: ult, dias: diasEntre(aFecha(hoy()), aFecha(fecha)), origen: c.recompra_dias ? 'fijado' : e?.frecuencia ? 'ritmo' : 'base' };
+}
+const textoCada = px => px.origen === 'ritmo' ? `suele comprar cada ~${px.cada} días` : (RECOMPRA_OPC.find(o => o[0] === px.cada)?.[1] || `cada ${px.cada} días`).toLowerCase();
+// Toca escribirle: ya llegó la fecha y su último pedido ya se entregó.
+const tocaEscribir = px => px && px.dias <= 0 && px.ultimo.estado_entrega === 'entregado';
+
 function notificaciones() {
   const C = club(); const out = []; const hoyS = hoy();
+  for (const c of lista('clientes')) {
+    const px = proximoPedido(c.id); if (!tocaEscribir(px)) continue;
+    out.push({ id: `recompra:${c.id}:${px.fecha}`, icono: 'calendario', fecha: px.fecha, titulo: `Escribirle a ${nombreCliente(c)}`,
+      texto: `${px.dias === 0 ? 'Hoy le toca' : `Desde el ${fechaCorta(px.fecha)} le toca`} su siguiente pedido (${textoCada(px)}; último: ${fechaCorta(px.ultimo.fecha)}).`,
+      acciones: [['Escribirle por WhatsApp', `NOTI.recompra('${c.id}')`], ['Nuevo pedido', `NOTI.pedido('${c.id}')`]] });
+  }
   for (const c of lista('clientes')) {
     if (esEmpresa(c)) continue; const e = C[c.id]; if (!e.regalosPend) continue;
     out.push({ id: `regalo:${c.id}:${e.regalosGanados}`, icono: 'regalo', fecha: e.regaloFecha || hoyS,
@@ -748,6 +781,14 @@ const NOTI = {
   avisar(cid) {
     const c = D.clientes.get(cid); const e = statsDe(cid);
     abrirWhatsApp(c.celular, `¡Hola ${c.nombre}! 👋 Te saluda Mr. Peanut 🥜\nTe cuento que ya llegaste a tus *${e.regalosGanados * CLUB.regalo_cada} sellos* en tu tarjeta Mr. Peanut 🎉, así que *te regalamos una mantequilla del sabor que tú quieras* en tu próximo pedido 🎁\n¿Cuál te gustaría: Maní, Chocomaní, Crunchy o Almendra?`);
+  },
+  async recompra(cid) {
+    const c = D.clientes.get(cid); const e = statsDe(cid); const px = proximoPedido(cid);
+    const txt = esEmpresa(c)
+      ? `Hola ${saludo(c)} 👋 Te escribe Mr. Peanut 🥜\n¿Cómo van con las mantequillas? Ya pasaron unas semanas desde su último pedido (${fechaCorta(px?.ultimo.fecha)}).\n¿Les preparamos el siguiente?`
+      : `¡Hola ${c.nombre}! 👋 Te saluda Mr. Peanut 🥜\n¿Qué tal tu mantequilla${e?.favorito ? ` de ${nombreSabor(e.favorito)}` : ''}? Seguro ya se está acabando 😄\n¿Te preparamos tu siguiente pedido?${e?.regalosPend ? `\n🎁 Recuerda que tienes ${plural(e.regalosPend, 'mantequilla')} de regalo esperándote.` : ''}`;
+    abrirWhatsApp(c.celular, txt);
+    await NOTI.marcar(notificaciones().filter(n => n.id.startsWith(`recompra:${cid}:`)).map(n => n.id));
   },
   pedido(cid) { cerrarNotif(); PF.abrir(null, cid); },
   abrir(pid) { cerrarNotif(); PF.abrir(pid); },
@@ -796,7 +837,9 @@ function renderInicio() {
   const porDia = dias14.map(f => [f, suma(ventas(p => p.fecha === f))]); const maxDia = Math.max(1, ...porDia.map(x => x[1]));
   const sab = {}; vMes.forEach(p => Object.entries(frascosDe(p).vendidos).forEach(([k, n]) => { sab[k] = (sab[k] || 0) + n; }));
   const canal = { B2C: suma(vMes.filter(p => p.canal !== 'b2b')), B2B: suma(vMes.filter(p => p.canal === 'b2b')) };
+  const tocaN = lista('clientes').filter(c => tocaEscribir(proximoPedido(c.id))).length;
   const alertas = [
+    [tocaN, 'calendario', 'Clientes a los que toca escribirles para su siguiente pedido', "UI.ped.filtro='recompra';UI.ped.canal='todos';UI.ped.mes='';ir('pedidos')"],
     [bajos.length, 'alerta', `Productos con stock bajo${bajos.length ? ': ' + bajos.map(p => nombreSabor(p.sabor)).join(', ') : ''}`, "ir('inventario')"],
     [porVencer.length, 'calendario', 'Lotes que vencen en 30 días', "ir('inventario')"],
     [vencidos.length, 'dinero', 'Créditos B2B vencidos', "UI.ped.filtro='cobrar';UI.ped.canal='b2b';ir('pedidos')"],
@@ -1016,6 +1059,7 @@ const FILTROS_PED = {
   documento: ['Sin boleta / factura', p => !p.anulado && !p.canje && !p.comprobante?.numero],
   canjes: ['Canjes (publicidad)', p => !p.anulado && p.canje],
   canje_pend: ['Canjes que falta publicar', p => !p.anulado && p.canje && !p.canje_cumplido],
+  recompra: ['Toca escribirle (siguiente pedido)', p => !p.anulado && ultimoPedidoDe(p.cliente_id)?.id === p.id && tocaEscribir(proximoPedido(p.cliente_id))],
   cerrados: ['Entregados y pagados', p => !p.anulado && p.estado_entrega === 'entregado' && saldoDe(p) === 0],
   anulados: ['Cancelados', p => p.anulado],
   todos: ['Todos', () => true],
@@ -1026,6 +1070,23 @@ const avatar = (c, nivel) => `<span class="avatar ${esEmpresa(c) ? 'emp' : NIVEL
 const nombreMes = m => { const [y, n] = m.split('-'); return `${MESES_L[+n - 1]} ${y}`; };
 const chipCodigo = cod => cod ? `<button type="button" class="chip-cod" title="Copiar código" onclick="event.stopPropagation();copiar('${h(cod)}')">${h(cod)}${ic('copiar')}</button>` : '';
 
+// Columna Fechas: cuándo se pidió, cuándo se entregó (o se entrega) y, en el último pedido del cliente, cuándo toca el siguiente.
+function celdaFechas(p) {
+  const hoyS = hoy();
+  const entrega = p.anulado ? '<span class="suave">cancelado</span>'
+    : p.estado_entrega === 'entregado' ? `<span class="ok-txt">✓ ${fechaCorta(p.entregado_en || p.fecha_entrega || p.fecha)}</span>`
+    : p.fecha_entrega ? `<span class="${p.fecha_entrega < hoyS ? 'falta' : ''}" title="Fecha programada">${p.fecha_entrega === hoyS ? 'hoy' : fechaCorta(p.fecha_entrega)}${p.fecha_entrega < hoyS ? ' (atrasada)' : ''}</span>`
+    : '<span class="suave">sin fecha</span>';
+  let prox = '';
+  if (!p.anulado && ultimoPedidoDe(p.cliente_id)?.id === p.id) {
+    const px = proximoPedido(p.cliente_id);
+    if (px) {
+      const cuando = px.dias > 0 ? `en ${plural(px.dias, 'día')}` : px.dias === 0 ? 'hoy' : `hace ${plural(-px.dias, 'día')}`;
+      prox = `<small>Siguiente</small><span class="${tocaEscribir(px) ? 'toca' : ''}" title="${h(textoCada(px))}">${fechaCorta(px.fecha)} <em>${cuando}</em></span>`;
+    }
+  }
+  return `<div class="fechas-celda"><small>Pedido</small><span>${fechaCorta(p.fecha)}</span><small>Entrega</small>${entrega}${prox}</div>`;
+}
 function renderPedidos() {
   const f = UI.ped;
   const todos = lista('pedidos').sort((a, b) => (b.fecha + (b.numero || '')).localeCompare(a.fecha + (a.numero || '')));
@@ -1045,9 +1106,11 @@ function renderPedidos() {
   if (f.mes) ps = ps.filter(p => p.fecha?.startsWith(f.mes));
   if (f.q) {
     const q = norm(f.q);
-    ps = ps.filter(p => { const c = D.clientes.get(p.cliente_id); return norm(`${p.numero} ${nombreCliente(c)} ${c?.celular} ${c?.codigo} ${c?.ruc} ${p.comprobante?.numero} ${p.guia?.numero}`).includes(q); });
+    const cel = limpiarCel(f.q);
+    if (cel) ps = ps.filter(p => celNorm(D.clientes.get(p.cliente_id)?.celular) === cel);
+    else ps = ps.filter(p => { const c = D.clientes.get(p.cliente_id); return norm(`${p.numero} ${nombreCliente(c)} ${c?.celular} ${c?.codigo} ${c?.ruc} ${p.comprobante?.numero} ${p.guia?.numero}`).includes(q); });
   }
-  const hayFiltro = f.canal !== 'todos' || f.filtro !== 'atender' || f.mes !== mesActual || f.q;
+  const hayFiltro = f.canal !== 'todos' || f.filtro !== 'todos' || f.mes !== mesActual || f.q;
   const totalLista = ps.filter(p => !p.anulado).reduce((a, p) => a + (+p.total || 0), 0);
   const C = club();
   const kpi = (filtro, icono, titulo, valor, sub, extra = '') => `<button type="button" class="kpi clic ${f.filtro === filtro ? 'sel' : ''}" onclick="UI.ped.filtro='${filtro}';renderPedidos()"><small>${ic(icono)} ${titulo}</small><b class="num">${valor}</b><em>${sub}</em>${extra}</button>`;
@@ -1075,17 +1138,16 @@ function renderPedidos() {
         <div class="campo buscar"><label>Buscar</label><input type="search" placeholder="Código, cliente, celular, RUC, boleta…" value="${h(f.q)}" oninput="UI.ped.q=this.value;renderPedidosLuego()" id="ped-q"></div>
       </div>
       <div class="barra-lista"><span><b>${plural(ps.length, 'pedido')}</b>${ps.length ? ` · ${soles(totalLista)}` : ''}</span>
-        ${hayFiltro ? `<button class="btn mini" onclick="UI.ped={filtro:'atender',canal:'todos',q:'',mes:hoy().slice(0,7)};renderPedidos()">Quitar filtros</button>` : ''}</div>
+        ${hayFiltro ? `<button class="btn mini" onclick="UI.ped=PED_BASE();renderPedidos()">Quitar filtros</button>` : ''}</div>
       <div class="tabla-wrap"><table class="tabla-ped">
-        <thead><tr><th>Pedido</th><th>Cliente</th><th>Detalle</th><th class="der">Total</th><th class="der">Ganancia</th><th>Pago</th><th>Estado</th><th>Comprobante</th><th></th></tr></thead>
+        <thead><tr><th>Pedido</th><th>Fechas</th><th>Cliente</th><th class="der">Monto</th><th class="der">Ganancia</th><th>Pago</th><th>Estado</th><th>Comprobante</th><th></th></tr></thead>
         <tbody>${ps.length ? ps.map(p => {
           const c = D.clientes.get(p.cliente_id); const e = C[p.cliente_id]; const R = rentabilidad(p);
           return `<tr class="clic ${p.anulado ? 'anulada' : ''}" onclick="PF.abrir('${p.id}')" title="Ver el detalle del pedido">
-            <td><b class="num-ped">${h(p.numero)}</b> ${tagCanal(p.canal)}
-              <br><small>${fechaCorta(p.fecha)}${p.fecha_entrega ? ` · entrega ${fechaCorta(p.fecha_entrega)}` : ''}</small></td>
+            <td><b class="num-ped">${h(p.numero)}</b> ${tagCanal(p.canal)}</td>
+            <td>${celdaFechas(p)}</td>
             <td><div class="cli-celda">${avatar(c, e?.nivel)}<div><b>${h(nombreCliente(c))}</b>${esPrueba('pedidos', p.id) ? ' <span class="tag prueba">prueba</span>' : ''}<br>
               ${p.canal === 'b2b' ? `<small>${h(c?.tipo_negocio || '')}</small>` : `${tagNivel(p.nivel_precio || 'oficial')} ${e?.regalosPend ? `<span class="tag regalo" title="Tiene regalo del Club">${ic('regalo')}</span>` : ''}`}</div></div></td>
-            <td class="det">${resumenItems(p)}${p.envio_asumido ? ` <span class="tag gratis">${p.courier?.propio ? 'lo lleva el dueño' : 'envío gratis'}</span>` : ''}</td>
             <td class="der num"><b>${soles(p.total)}</b></td>
             <td class="der num">${p.anulado ? '<small class="suave">—</small>' : p.canje ? `<b class="m-medio-txt" title="Costo de las mantequillas${R.courier ? ' + courier' : ''}">−${soles(-R.ganancia)}</b><br><small class="suave">publicidad</small>` : `<b class="${claseMargen(R.margen)}-txt" title="Venta ${soles(R.ingreso)} − costo ${soles(R.costo)}${R.courier ? ` − courier ${soles(R.courier)}` : ''}">${soles(R.ganancia)}</b><br><small class="${claseMargen(R.margen)}-txt">${pct(R.margen)} margen</small>`}</td>
             <td>${celdaPago(p)}</td>
@@ -1340,7 +1402,8 @@ const PF = {
   nuevo() {
     F._modo = 'nuevo'; F.cliente_id = null; F.nivel_precio = 'oficial';
     const q = F._q.trim(); const n = F._nuevo;
-    if (soloDigitos(q).length >= 6 && soloDigitos(q).length === q.replace(/\s/g, '').length) {
+    if (limpiarCel(q)) n.celular = limpiarCel(q);
+    else if (soloDigitos(q).length >= 6 && soloDigitos(q).length === q.replace(/\s/g, '').length) {
       if (F.canal === 'b2b' && soloDigitos(q).length === 11) n.ruc = q; else n.celular = q;
     } else if (q) {
       if (F.canal === 'b2b') n.nombre = q;
@@ -1355,7 +1418,7 @@ const PF = {
     const res = buscarClientes(q, 8, tipo); const C = club();
     $('#pf-sug').innerHTML = q.trim() ? `<div class="sugerencias">
       ${res.map(c => `<button onclick="PF.fijarCliente('${c.id}')"><b>${h(nombreCliente(c))}</b> <small>${h(c.celular)} · ${h(esEmpresa(c) ? (c.ruc ? 'RUC ' + c.ruc : c.tipo_negocio || '') : c.distrito || '')}</small> <span style="margin-left:auto">${esEmpresa(c) ? '' : tagNivel(C[c.id].nivel)}</span></button>`).join('')}
-      <button onclick="PF.nuevo()" style="color:var(--caramelo);font-weight:900">＋ Registrar “${h(q)}” como ${tipo === 'empresa' ? 'empresa nueva' : 'cliente nuevo'}</button></div>` : '';
+      <button onclick="PF.nuevo()" style="color:var(--caramelo);font-weight:900">＋ Registrar “${h(limpiarCel(q) ?? q)}” como ${tipo === 'empresa' ? 'empresa nueva' : 'cliente nuevo'}</button></div>` : '';
   },
   setN(k, v) {
     F._nuevo[k] = v;
@@ -1425,7 +1488,7 @@ const PF = {
         ${r ? `<div class="aviso info">Referido por <b>${h(nombreCliente(r))}</b> <span class="codigo">${h(r.codigo)}</span> · ${h(r.nombre)} gana +1 sello cuando este pedido se pague y entregue. <a href="#" onclick="PF.quitarRef();return false">Quitar</a></div>`
           : `<input type="search" placeholder="Ej.: PEANUT-ANDREA" value="${h(F._refQ)}" oninput="PF.buscarRef(this.value)"><div id="pf-ref-sug"></div>`}</div>`;
     };
-    const inp = (k, t, extra = '', full = false) => `<div class="campo" ${full ? 'style="grid-column:1/-1"' : ''}><label>${t}</label><input type="text" ${k === 'nombre' ? 'id="pf-n-nombre"' : ''} value="${h(F._nuevo[k])}" oninput="PF.setN('${k}',this.value)" ${extra}></div>`;
+    const inp = (k, t, extra = '', full = false) => `<div class="campo" ${full ? 'style="grid-column:1/-1"' : ''}><label>${t}</label><input type="text" ${k === 'nombre' ? 'id="pf-n-nombre"' : ''} value="${h(F._nuevo[k])}" oninput="${k === 'celular' ? 'this.value=celInput(this.value);' : ''}PF.setN('${k}',this.value)" ${extra}></div>`;
     if (F._modo === 'buscar') {
       const orig = F.id && D.clientes.get(F._cliOrig);
       el.innerHTML = `${orig ? `<div class="aviso info" style="margin-bottom:12px">Elige a quién pasa el pedido ${h(F.numero)}. Se guarda al darle <b>Guardar</b>. <a href="#" onclick="PF.fijarCliente('${orig.id}');return false">Dejarlo en ${h(nombreCliente(orig))}</a></div>` : ''}
@@ -2095,7 +2158,7 @@ const CLI = {
     const emp = esEmpresa(CF); const id = CF.id;
     const e = nuevo ? null : statsDe(id);
     const ref = CF.referido_por ? D.clientes.get(CF.referido_por) : null;
-    const campo = (k, t, tipo = 'text', extra = '') => `<div class="campo"><label>${t}</label><input type="${tipo}" value="${h(CF[k] || '')}" oninput="CF['${k}']=this.value${k === 'nombre' || k === 'apellido' ? ';CLI.prevCod()' : ''}" ${extra}></div>`;
+    const campo = (k, t, tipo = 'text', extra = '') => `<div class="campo"><label>${t}</label><input type="${tipo}" value="${h(CF[k] || '')}" oninput="${k === 'celular' ? 'this.value=celInput(this.value);' : ''}CF['${k}']=this.value${k === 'nombre' || k === 'apellido' ? ';CLI.prevCod()' : ''}" ${extra}></div>`;
     const tieneDir = !!(String(CF.direccion || '').trim() || String(CF.referencia || '').trim() || !CF._mismaDir);
     const verDir = CF._verDir ?? tieneDir;
     const verMas = CF._verMas ?? !!(CF.nivel_manual || String(CF.notas || '').trim());
@@ -2109,6 +2172,10 @@ const CLI = {
           ${campo('nombre', 'Nombre *')}${campo('apellido', 'Apellido *')}${campo('celular', 'Celular *', 'tel', 'inputmode="tel" placeholder="9 dígitos"')}`}
           <div class="campo"><label>Distrito *</label>${selectDistrito(CF.distrito, 'CF.distrito=this.value')}</div>
           <div class="campo"><label>Correo <small class="suave">(opcional)</small></label><input type="email" value="${h(CF.correo || '')}" oninput="CF.correo=this.value" placeholder="nombre@correo.com"></div>
+          <div class="campo"><label>Recordarme su siguiente pedido</label><select onchange="CF.recompra_dias=this.value===''?null:+this.value">
+            <option value="">Automático${e?.frecuencia ? ` (suele comprar cada ~${e.frecuencia} días)` : ` (cada ${variablesAnalisis().frecuencia} días)`}</option>
+            ${RECOMPRA_OPC.map(([d, t]) => `<option value="${d}" ${CF.recompra_dias === d ? 'selected' : ''}>${t}</option>`).join('')}
+            <option value="0" ${CF.recompra_dias === 0 ? 'selected' : ''}>No recordar</option></select></div>
         </div>
         ${emp ? '' : `<div class="club-cli">
           <div class="campo"><label>Código de referido <small class="suave">(automático)</small></label>${CLI.bloqueCodigo()}</div>
@@ -2161,7 +2228,7 @@ const CLI = {
           <button type="button" class="btn mini" onclick="copiar(CLI.textoCodigo())">Copiar mensaje para compartir</button></div>`}
       </div>
       <div class="kpis">
-        <div class="kpi"><small>Compras</small><b class="num">${e.ventas.length}</b><em>${e.frecuencia ? `cada ~${e.frecuencia} días` : e.ventas.length ? 'una sola compra' : 'todavía no compra'}</em></div>
+        <div class="kpi"><small>Compras</small><b class="num">${e.ventas.length}</b><em>${e.frecuencia ? `cada ~${e.frecuencia} días` : e.ventas.length ? 'una sola compra' : 'todavía no compra'}${(() => { const px = proximoPedido(id); return px ? ` · siguiente ${fechaCorta(px.fecha)}` : ''; })()}</em></div>
         <div class="kpi"><small>Gasto total</small><b class="num">${soles(e.gasto)}</b><em>ticket promedio ${soles(e.ventas.length ? e.gasto / e.ventas.length : 0)}</em></div>
         <div class="kpi"><small>Ganancia que deja</small><b class="num">${soles(e.ganancia)}</b><em>${e.gasto ? `<span class="${claseMargen(e.margen)}-txt">margen ${pct(e.margen)}</span>` : '—'}</em></div>
         <div class="kpi"><small>Debe</small><b class="num" style="color:${e.saldo > 0 ? 'var(--error)' : 'inherit'}">${soles(e.saldo)}</b><em>${e.pedidos.filter(vencido).length ? `<span class="falta">${e.pedidos.filter(vencido).length} vencido(s)</span>` : e.ultima ? `última compra hace ${plural(e.dias, 'día')}` : ''}</em></div>
@@ -3800,7 +3867,7 @@ const BOT = {
 async function arrancar() {
   try { await iniciarDatos(); }
   catch (e) { document.querySelector('main').innerHTML = `<div class="aviso error">No se pudo abrir la base de datos local: ${h(e.message)}. Abre el panel desde Chrome o Edge (no en modo incógnito).</div>`; return; }
-  $('#tabs').addEventListener('click', e => { const b = e.target.closest('[data-vista]'); if (b) ir(b.dataset.vista); });
+  $('#tabs').addEventListener('click', e => { const b = e.target.closest('[data-vista]'); if (!b) return; if (b.dataset.vista === 'pedidos') UI.ped = PED_BASE(); ir(b.dataset.vista); });
   $('#btn-notif').addEventListener('click', e => { e.stopPropagation(); cerrarMas(); $('#panel-notif').classList.toggle('abierto'); pintarCampana(); });
   document.addEventListener('click', e => { if (!e.target.closest('#notif-caja')) cerrarNotif(); });
   $('#btn-mas').addEventListener('click', e => { e.stopPropagation(); const m = $('#menu-mas'); m.classList.toggle('abierto'); $('#btn-mas').setAttribute('aria-expanded', m.classList.contains('abierto')); });
