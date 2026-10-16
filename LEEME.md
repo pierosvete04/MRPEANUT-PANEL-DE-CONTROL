@@ -14,7 +14,15 @@ Todo es HTML, CSS y JavaScript plano (sin frameworks ni instalación). Crear o e
 | **Clientes** | Personas (tarjeta de sellos, nivel y código de referido) y empresas (RUC, contacto, lo que deben). |
 | **Análisis de clientes** | Ventas, ticket, recompra, sabores, mejores clientes, quién dejó de comprar, B2C vs B2B y análisis por cliente. |
 | **Club Mr. Peanut** | Registrar historias o reseñas (+1 sello, a mano), regalos por entregar, cerca de VIP, referidos y las **variables del Club** (editables). |
-| **Productos y promociones** | Precios sueltos, packs por nivel, fotos y el link del catálogo para Meta. |
+| **Productos y promociones** | Precios sueltos, packs por nivel, baldes, fotos y el link del catálogo para Meta. |
+
+## Baldes (1 y 4 kg)
+
+- Son productos con **Formato: Balde** (los frascos de 150 g son los que usan packs, sueltos y regalos). Se crean con **＋ Balde** y salen en su propia sección.
+- Vienen **ocultos del catálogo de Meta / WhatsApp Business** (casilla “Mostrar en el catálogo de Meta” desmarcada). Cualquier producto se puede ocultar igual.
+- **Consumidores (B2C)**: botones “＋ Balde…” en el pedido, al precio del balde (igual para Oficial, VIP y Leyenda). No suman sello.
+- **Empresas (B2B)**: precio por tramo según cuántos baldes lleva, con IGV: Comercial (1 a 3), Mayorista (4 a 6), Distribuidor (7 a 9) y Exclusivo (10 o más). Se configura en la ficha del balde; si un tramo está vacío usa el anterior o el precio del balde. Al cambiar la cantidad el precio se ajusta solo; si lo escribes a mano se respeta.
+- Descuentan stock de su propio producto en Inventario. Solo avisan stock bajo si les pones un mínimo.
 | **Inventario** | Stock por producto y **por lote**. Entradas (con n.° de lote y vencimiento), salidas con motivo y conteos. Cada pedido descuenta solo, del lote que vence primero. |
 | **Sincronización** | Supabase, WhatsApp (número, escritorio o Web, datos de pago), couriers, días de crédito, respaldo y datos de ejemplo. |
 
@@ -84,9 +92,8 @@ Se puede elegir otro mensaje y editar el texto antes de enviarlo.
 | Días sin comprar para pausa | 60 | Su siguiente pedido se cobra a precio oficial |
 | Tope de packs Leyenda por semana | 2 | Solo avisa |
 | Historias/reseñas que suman por mes | 1 | 0 = sin límite |
-| Historia debe ser de un pedido entregado | Sí | 1 historia por pedido |
 
-Reglas fijas: un pedido B2C con pack, **pagado y entregado**, suma 1 sello (los frascos sueltos y el B2B no suman). El amigo referido da +1 sello cuando su primer pack queda pagado y entregado. Las historias y reseñas las registra el encargado a mano.
+Reglas fijas: un pedido B2C con pack, **pagado y entregado**, suma 1 sello (los frascos sueltos y el B2B no suman). El amigo referido da +1 sello cuando su primer pack queda pagado y entregado. Las historias y reseñas las registra el encargado a mano; el pedido es opcional (para clientas antiguas sin compra registrada se elige “Sin pedido”), y si se elige uno, es 1 historia por pedido.
 
 ## Abrirlo e instalarlo
 

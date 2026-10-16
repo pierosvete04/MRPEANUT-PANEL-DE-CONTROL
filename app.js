@@ -51,7 +51,6 @@ const CLUB_BASE = {
   dias_pausa: 60,             // sin compras en 60 días: nivel en pausa
   tope_leyenda_semana: 2,     // máximo de packs Leyenda por semana
   resenas_mes: 1,             // historias/reseñas que suman sello por mes
-  resena_requiere_pedido: 1,  // 1 = la historia/reseña debe ser de un pedido entregado (1 por pedido)
 };
 
 // Costo de producción por frasco de 150 g (Centro de costos, septiembre 2026). Se edita en Productos.
@@ -82,7 +81,7 @@ const SUPABASE_PROYECTO = { url: 'https://ymvfbpckxegnssvjsrzt.supabase.co', ano
 
 // Columnas que existen en Supabase (lo demás es solo local, p. ej. _demo o _img_pendiente).
 const COLUMNAS = {
-  productos: ['id', 'nombre', 'sabor', 'descripcion', 'precio', 'costo', 'disponible', 'en_catalogo', 'imagen_url', 'media', 'orden', 'creado_en', 'updated_at', 'eliminado'],
+  productos: ['id', 'nombre', 'sabor', 'formato', 'precios_b2b', 'descripcion', 'precio', 'costo', 'disponible', 'en_catalogo', 'imagen_url', 'media', 'orden', 'creado_en', 'updated_at', 'eliminado'],
   packs: ['id', 'nombre', 'frascos', 'tipo', 'max_almendra', 'precio_oficial', 'precio_vip', 'precio_leyenda', 'descripcion', 'activo', 'en_catalogo', 'imagen_url', 'media', 'orden', 'creado_en', 'updated_at', 'eliminado'],
   clientes: ['id', 'tipo_cliente', 'codigo', 'nombre', 'apellido', 'razon_social', 'ruc', 'contacto', 'tipo_negocio', 'celular', 'correo', 'regalo_agendado', 'direccion', 'distrito', 'direccion_envio', 'referencia', 'referido_por', 'nivel_manual', 'recompra_dias', 'notas', 'creado_en', 'updated_at', 'eliminado'],
   pedidos: ['id', 'numero', 'canal', 'cliente_id', 'fecha', 'fecha_entrega', 'estado_entrega', 'estado_pago', 'anulado', 'modalidad_pago', 'fecha_vencimiento', 'nivel_precio', 'items', 'subtotal', 'descuento', 'descuento_referido', 'descuento_motivo', 'descuento_pct', 'canje', 'canje_publica', 'canje_cumplido', 'envio', 'envio_asumido', 'costo', 'igv', 'total', 'pagos', 'metodo_pago', 'courier', 'comprobante', 'guia', 'direccion_envio', 'referido_por', 'notas', 'entregado_en', 'creado_en', 'updated_at', 'eliminado'],
@@ -226,7 +225,7 @@ async function guardar(tabla, rec) {
   rec.updated_at = ahora;
   if (!rec.creado_en) rec.creado_en = ahora;
   if (rec.eliminado == null) rec.eliminado = false;
-  D[tabla].set(rec.id, rec);
+  D[tabla].set(rec.id, rec); invalidar(); // antes de esperar, para que nada lea cálculos viejos mientras tanto
   await idb.put(tabla, rec);
   if (!rec._demo) { const clave = `${tabla}:${rec.id}`; COLA.add(clave); await idb.put('cola', { clave, tabla, id: rec.id }); }
   invalidar(); pintarEstado(); programarSync(); setTimeout(pintarCampana, 0);
@@ -306,7 +305,16 @@ async function migrarFotosV2() {
 }
 
 const fotoDe = (tabla, r) => IMG[`${tabla}/${r.id}`] || r.imagen_url || r.imagen_local || 'img/productos/pack.jpg';
-const productoDeSabor = sabor => lista('productos').find(p => p.sabor === sabor);
+// Frasco de 150 g = el producto del sabor (packs, sueltos, regalos). Los baldes de 1 y 4 kg van aparte.
+const esBalde = p => p?.formato === 'balde';
+const productoDeSabor = sabor => lista('productos').find(p => p.sabor === sabor && !esBalde(p));
+const baldes = () => lista('productos').filter(esBalde).sort((a, b) => (a.orden || 0) - (b.orden || 0));
+// Empresas (B2B): precio por tramo según cuántas unidades lleva (con IGV). Sin precio del tramo, usa el anterior o el normal.
+const TRAMOS_B2B = [['Comercial', 1, '1 a 3'], ['Mayorista', 4, '4 a 6'], ['Distribuidor', 7, '7 a 9'], ['Exclusivo', 10, '10 o más']];
+const tramoB2B = n => TRAMOS_B2B.reduce((t, x, i) => (+n || 0) >= x[1] ? i : t, 0);
+const precioB2B = (p, n) => { const ps = p?.precios_b2b || []; for (let i = tramoB2B(n); i >= 0; i--) if (ps[i] != null && ps[i] !== '') return +ps[i]; return +(p?.precio || 0); };
+const tieneTramos = p => (p?.precios_b2b || []).some(x => x != null && x !== '');
+const nombreProd = p => !p ? '' : esBalde(p) ? p.nombre : nombreSabor(p.sabor);
 const precioSuelto = sabor => +(productoDeSabor(sabor)?.precio || 0);
 const packsActivos = () => lista('packs').filter(p => p.activo !== false).sort((a, b) => (a.orden || 0) - (b.orden || 0));
 const precioPack = (pack, nivel) => { const v = pack?.['precio_' + nivel]; return v == null || v === '' ? null : +v; };
@@ -315,7 +323,7 @@ const precioPack = (pack, nivel) => { const v = pack?.['precio_' + nivel]; retur
 // Cada pedido guarda el costo de lo que llevó (costo_unit en cada ítem y `costo` total), así el
 // margen de un pedido viejo no cambia si luego cambias el costo del producto.
 const costoSabor = sabor => { const c = productoDeSabor(sabor)?.costo; return c != null && c !== '' ? +c : (COSTOS_BASE[sabor] || 0); };
-const costoProducto = id => { const p = D.productos.get(id); return p ? (p.costo != null && p.costo !== '' ? +p.costo : (COSTOS_BASE[p.sabor] || 0)) : 0; };
+const costoProducto = id => { const p = D.productos.get(id); return p ? (p.costo != null && p.costo !== '' ? +p.costo : esBalde(p) ? 0 : (COSTOS_BASE[p.sabor] || 0)) : 0; };
 const pct = n => (Math.round(n * 10) / 10).toLocaleString('es-PE') + '%';
 const margenDe = (precio, costo) => precio > 0 ? (precio - costo) / precio * 100 : 0;
 const claseMargen = m => m >= MARGEN_MINIMO ? 'm-ok' : m >= 30 ? 'm-medio' : 'm-bajo';
@@ -387,7 +395,7 @@ function frascosDe(p) {
   for (const i of p.items || []) {
     if (i.tipo === 'pack') for (const [s, n] of Object.entries(i.sabores || {})) out.vendidos[s] = (out.vendidos[s] || 0) + n;
     if (i.tipo === 'suelto') out.vendidos[i.sabor] = (out.vendidos[i.sabor] || 0) + (i.cantidad || 0);
-    if (i.tipo === 'linea') { const s = D.productos.get(i.producto_id)?.sabor; if (s) out.vendidos[s] = (out.vendidos[s] || 0) + (+i.cantidad || 0); }
+    if (i.tipo === 'linea') { const pr = D.productos.get(i.producto_id); const s = esBalde(pr) ? null : pr?.sabor; if (s) out.vendidos[s] = (out.vendidos[s] || 0) + (+i.cantidad || 0); }
     if (i.tipo === 'regalo') out.regalo[i.sabor] = (out.regalo[i.sabor] || 0) + 1;
   }
   return out;
@@ -503,7 +511,6 @@ function puedeResena(cid, pedidoId) {
   const mes = hoy().slice(0, 7);
   const delMes = lista('sellos_extra').filter(s => s.cliente_id === cid && s.tipo === 'resena' && String(s.fecha).startsWith(mes)).length;
   if (CLUB.resenas_mes > 0 && delMes >= CLUB.resenas_mes) return `Ya sumó ${plural(delMes, 'historia/reseña', 'historias/reseñas')} este mes (máximo ${CLUB.resenas_mes}).`;
-  if (CLUB.resena_requiere_pedido && !pedidoId) return 'Elige de qué pedido entregado es la historia o reseña.';
   if (pedidoId && lista('sellos_extra').some(s => s.tipo === 'resena' && s.pedido_id === pedidoId)) return 'Ese pedido ya tiene su historia/reseña (1 por pedido).';
   return null;
 }
@@ -511,6 +518,8 @@ const pedidosParaResena = cid => {
   const usados = new Set(lista('sellos_extra').filter(s => s.tipo === 'resena').map(s => s.pedido_id));
   return lista('pedidos').filter(p => p.cliente_id === cid && !p.anulado && p.estado_entrega === 'entregado' && !usados.has(p.id)).sort((a, b) => b.fecha.localeCompare(a.fecha));
 };
+// El pedido es opcional: una clienta antigua puede no tener su compra registrada.
+const opcionesPedResena = ps => `${ps.map(p => `<option value="${p.id}">${h(p.numero)} · ${fechaCorta(p.fecha)}</option>`).join('')}<option value="">Sin pedido (venta antigua o no registrada)</option>`;
 async function registrarResena(cid, { red, link, pedido_id, nota }) {
   const err = puedeResena(cid, pedido_id); if (err) return err;
   const antes = { ...statsDe(cid) };
@@ -764,7 +773,7 @@ function notificaciones() {
     if (p.estado_entrega !== 'entregado' && p.fecha_entrega && p.fecha_entrega <= hoyS) out.push({ id: `entrega:${p.id}:${p.fecha_entrega}`, icono: 'camion', fecha: p.fecha_entrega,
       titulo: p.fecha_entrega === hoyS ? `Entregar hoy: ${p.numero}` : `Entrega atrasada: ${p.numero}`, texto: `${nombreCliente(c)} · ${p.direccion_envio || ''}`, acciones: [['Abrir pedido', `NOTI.abrir('${p.id}')`]] });
   }
-  for (const pr of lista('productos')) if (stockDe(pr.id) <= stockMin(pr.id)) out.push({ id: `stock:${pr.id}:${hoyS.slice(0, 7)}`, icono: 'alerta', fecha: hoyS, titulo: `Stock bajo: ${nombreSabor(pr.sabor)}`, texto: `Quedan ${stockDe(pr.id)} frascos (mínimo ${stockMin(pr.id)}).`, acciones: [['Registrar entrada', `NOTI.entrada('${pr.id}')`]] });
+  for (const pr of lista('productos')) if (stockBajo(pr)) out.push({ id: `stock:${pr.id}:${hoyS.slice(0, 7)}`, icono: 'alerta', fecha: hoyS, titulo: `Stock bajo: ${nombreProd(pr)}`, texto: `Quedan ${stockDe(pr.id)} frascos (mínimo ${stockMin(pr.id)}).`, acciones: [['Registrar entrada', `NOTI.entrada('${pr.id}')`]] });
   return out.sort((a, b) => String(b.fecha).localeCompare(String(a.fecha)));
 }
 const NOTI = {
@@ -824,7 +833,7 @@ function renderInicio() {
   const porEntregar = activos.filter(p => p.estado_entrega !== 'entregado');
   const clientesActivos = lista('clientes').filter(c => C[c.id].dias != null && C[c.id].dias <= 60).length;
   const en30 = sumarDias(hoyS, 30);
-  const bajos = lista('productos').filter(p => stockDe(p.id) <= stockMin(p.id));
+  const bajos = lista('productos').filter(stockBajo);
   const porVencer = Object.values(inv.lotes).filter(L => L.queda > 0 && L.vence && L.vence <= en30);
   const regalos = lista('clientes').filter(c => !esEmpresa(c) && C[c.id].regalosPend);
   const cercaVip = lista('clientes').filter(c => !esEmpresa(c) && C[c.id].nivelAuto === 'oficial' && !c.nivel_manual && C[c.id].faltaVip > 0 && C[c.id].faltaVip <= 2);
@@ -840,7 +849,7 @@ function renderInicio() {
   const tocaN = lista('clientes').filter(c => tocaEscribir(proximoPedido(c.id))).length;
   const alertas = [
     [tocaN, 'calendario', 'Clientes a los que toca escribirles para su siguiente pedido', "UI.ped.filtro='recompra';UI.ped.canal='todos';UI.ped.mes='';ir('pedidos')"],
-    [bajos.length, 'alerta', `Productos con stock bajo${bajos.length ? ': ' + bajos.map(p => nombreSabor(p.sabor)).join(', ') : ''}`, "ir('inventario')"],
+    [bajos.length, 'alerta', `Productos con stock bajo${bajos.length ? ': ' + bajos.map(p => nombreProd(p)).join(', ') : ''}`, "ir('inventario')"],
     [porVencer.length, 'calendario', 'Lotes que vencen en 30 días', "ir('inventario')"],
     [vencidos.length, 'dinero', 'Créditos B2B vencidos', "UI.ped.filtro='cobrar';UI.ped.canal='b2b';ir('pedidos')"],
     [sinDoc.length, 'pedidos', 'Ventas sin boleta o factura', "UI.ped.filtro='documento';UI.ped.canal='todos';ir('pedidos')"],
@@ -1324,7 +1333,7 @@ const PF = {
       F = {
         ...p, canal: p.canal || 'b2c', _modo: 'sel', _q: '', _nuevo: clienteVacio(p.canal === 'b2b' ? 'empresa' : 'persona'), _refQ: '',
         packs: (p.items || []).filter(i => i.tipo === 'pack'), sueltos,
-        lineas: (p.items || []).filter(i => i.tipo === 'linea'),
+        lineas: (p.items || []).filter(i => i.tipo === 'linea').map(i => ({ ...i, _manual: true })),
         regalos: (p.items || []).filter(i => i.tipo === 'regalo').map(i => i.sabor),
         _regalosOrig: (p.items || []).filter(i => i.tipo === 'regalo').length,
         _descRef: +p.descuento_referido > 0, _descTipo: +p.descuento_pct > 0 ? 'pct' : 'soles', _descValor: +p.descuento_pct > 0 ? +p.descuento_pct : r2((+p.descuento || 0) - (+p.descuento_referido || 0)), _actDir: false,
@@ -1565,28 +1574,51 @@ const PF = {
   // B2B: líneas con cantidad y precio unitario (con IGV)
   agregarLinea(prodId) {
     const pr = prodId ? D.productos.get(prodId) : null;
-    F.lineas.push({ tipo: 'linea', producto_id: pr?.id || null, nombre: pr ? pr.nombre : '', cantidad: 1, precio_unit: pr ? +pr.precio : 0 });
+    F.lineas.push({ tipo: 'linea', producto_id: pr?.id || null, nombre: pr ? pr.nombre : '', cantidad: 1, precio_unit: pr ? precioB2B(pr, 1) : 0 });
     PF.pintarItems(); PF.pintarResumen();
     if (!pr) setTimeout(() => document.querySelectorAll('.lin-nombre')[F.lineas.length - 1]?.focus(), 30);
   },
   lin(i, k, v) {
     const l = F.lineas[i]; l[k] = k === 'nombre' ? v : Math.max(0, +v || 0);
+    if (k === 'precio_unit') l._manual = true;
+    const pr = D.productos.get(l.producto_id);
+    if (k === 'cantidad' && tieneTramos(pr) && !l._manual) {
+      l.precio_unit = precioB2B(pr, l.cantidad);
+      const pu = $(`#lin-pu-${i}`); if (pu) pu.value = l.precio_unit;
+    }
+    const tr = $(`#lin-tr-${i}`); if (tr) tr.innerHTML = PF.textoTramo(l);
     const s = $(`#lin-sub-${i}`); if (s && k !== 'costo_unit') s.firstChild.textContent = soles(l.cantidad * l.precio_unit);
     PF.pintarResumen();
   },
   quitarLinea(i) { F.lineas.splice(i, 1); PF.pintarItems(); PF.pintarResumen(); },
+  textoTramo(l) {
+    const pr = D.productos.get(l.producto_id); if (F.canal !== 'b2b' || !tieneTramos(pr)) return '';
+    const t = TRAMOS_B2B[tramoB2B(l.cantidad)];
+    return l._manual && +l.precio_unit !== precioB2B(pr, l.cantidad) ? `precio a mano · tramo ${t[0]}: ${soles(precioB2B(pr, l.cantidad))} <a href="#" onclick="PF.precioTramo(${F.lineas.indexOf(l)});return false">usar</a>` : `tramo ${t[0]} (${t[2]})`;
+  },
+  precioTramo(i) { const l = F.lineas[i]; l._manual = false; l.precio_unit = precioB2B(D.productos.get(l.producto_id), l.cantidad); PF.pintarItems(); PF.pintarResumen(); },
+  // B2C: baldes de 1 y 4 kg a su precio de lista (no suman sello)
+  balde(pid, d) {
+    const pr = D.productos.get(pid); if (!pr) return;
+    let l = F.lineas.find(x => x.producto_id === pid);
+    if (!l) { if (d < 0) return; l = { tipo: 'linea', producto_id: pid, nombre: pr.nombre, cantidad: 0, precio_unit: +pr.precio || 0 }; F.lineas.push(l); }
+    l.cantidad = Math.max(0, l.cantidad + d);
+    if (!l.cantidad) F.lineas = F.lineas.filter(x => x !== l);
+    PF.pintarItems(); PF.pintarResumen();
+  },
+  totalBaldes: () => F.canal === 'b2b' ? 0 : r2(F.lineas.reduce((a, l) => a + (+l.cantidad || 0) * (+l.precio_unit || 0), 0)),
 
   pintarItems() {
     const el = $('#pf-items'); if (!el) return;
     const stepper = (fn, v) => `<span class="stepper"><button type="button" onclick="${fn}(-1)">−</button><span>${v}</span><button type="button" onclick="${fn}(1)">+</button></span>`;
     if (F.canal === 'b2b') {
-      el.innerHTML = `<div class="packs-botones">${lista('productos').sort((a, b) => (a.orden || 0) - (b.orden || 0)).map(p => `<button class="pack-btn" onclick="PF.agregarLinea('${p.id}')">＋ ${h(nombreSabor(p.sabor))} 150 g</button>`).join('')}
-          <button class="pack-btn" onclick="PF.agregarLinea()">＋ Otro producto <small>ej. balde 4 kg</small></button></div>
+      el.innerHTML = `<div class="packs-botones">${lista('productos').sort((a, b) => (a.orden || 0) - (b.orden || 0)).map(p => `<button class="pack-btn" onclick="PF.agregarLinea('${p.id}')">＋ ${h(esBalde(p) ? p.nombre : nombreProd(p) + ' 150 g')}</button>`).join('')}
+          <button class="pack-btn" onclick="PF.agregarLinea()">＋ Otro producto</button></div>
         ${F.lineas.length ? `<div class="lin-cab"><span>Producto</span><span>Cant.</span><span>Precio unit. (con IGV)</span><span class="der">Subtotal</span><span></span></div>` : '<p class="suave">Agrega los productos. El precio se escribe por pedido (incluye IGV).</p>'}
         ${F.lineas.map((l, i) => `<div class="lin-fila">
           <input type="text" class="lin-nombre" value="${h(l.nombre)}" placeholder="Descripción" oninput="PF.lin(${i},'nombre',this.value)">
           <input type="number" min="1" step="1" value="${l.cantidad}" oninput="PF.lin(${i},'cantidad',this.value)">
-          <input type="number" min="0" step="0.1" value="${l.precio_unit}" oninput="PF.lin(${i},'precio_unit',this.value)">
+          <span class="lin-pu"><input type="number" min="0" step="0.1" id="lin-pu-${i}" value="${l.precio_unit}" oninput="PF.lin(${i},'precio_unit',this.value)"><small class="suave" id="lin-tr-${i}">${PF.textoTramo(l)}</small></span>
           <b class="der num" id="lin-sub-${i}">${soles(l.cantidad * l.precio_unit)}${l.producto_id ? `<small class="lin-costo">costo ${soles(costoProducto(l.producto_id))} c/u</small>` : `<input type="number" min="0" step="0.1" class="lin-costo-in" value="${+l.costo_unit || ''}" placeholder="costo c/u" title="Costo por unidad" oninput="PF.lin(${i},'costo_unit',this.value)">`}</b>
           <button class="btn mini peligro" onclick="PF.quitarLinea(${i})">Quitar</button></div>`).join('')}`;
       return;
@@ -1602,6 +1634,7 @@ const PF = {
       <div class="packs-botones">${packsActivos().map(pk => { const pr = precioPack(pk, F.nivel_precio); return `
         <button class="pack-btn" ${pr == null ? 'disabled style="opacity:.4"' : ''} title="${pk.tipo === 'almendra' ? 'Solo almendra' : `Máx. ${pk.max_almendra} de almendra`}" onclick="PF.agregarPack('${pk.id}')">＋ ${h(pk.nombre.replace('Arma tu ', ''))} <b>${pr == null ? '—' : soles(pr)}</b></button>`; }).join('')}
         <button class="pack-btn suelto-btn ${F._verSueltos ? 'activo' : ''}" onclick="F._verSueltos=!F._verSueltos;PF.pintarItems()">${F._verSueltos ? '▾' : '＋'} Frascos sueltos${Object.values(F.sueltos).some(Boolean) ? ` <b>(${Object.values(F.sueltos).reduce((x, y) => x + y, 0)})</b>` : ''}</button>
+        ${baldes().map(b => `<button class="pack-btn" ${b.disponible === false ? 'disabled style="opacity:.4" title="Agotado"' : ''} onclick="PF.balde('${b.id}',1)">＋ ${h(b.nombre)} <b>${soles(b.precio)}</b></button>`).join('')}
         ${regDisp > F.regalos.length ? `<button class="pack-btn regalo-btn" onclick="PF.agregarRegalo()">${ic('regalo')} Regalo del Club</button>` : ''}</div>
       ${F.packs.map((it, i) => {
         const suma = Object.values(it.sabores).reduce((a, b) => a + b, 0);
@@ -1619,13 +1652,19 @@ const PF = {
           <div class="if-sab">${SABORES.map(s => `<span class="mini-sab"><i class="col-sabor-${s.id}"></i>${s.nombre} <small>${soles(precioSuelto(s.id))}</small>${stepper(`PF.suelto.bind(null,'${s.id}')`, F.sueltos[s.id] || 0)}</span>`).join('')}</div>
           <b class="if-precio num">${soles(SABORES.reduce((a, s) => a + (F.sueltos[s.id] || 0) * precioSuelto(s.id), 0))}</b>
         </div>` : ''}
+      ${F.lineas.map(l => `<div class="item-fila">
+          <div class="if-nom"><b>${h(l.nombre)}</b><small class="suave">${soles(l.precio_unit)} c/u · no suma sello</small></div>
+          <div class="if-sab">${stepper(`PF.balde.bind(null,'${l.producto_id}')`, l.cantidad)}</div>
+          <b class="if-precio num">${soles(l.cantidad * l.precio_unit)}</b>
+          <button class="btn mini peligro solo-ic" onclick="PF.balde('${l.producto_id}',-${l.cantidad})" title="Quitar" aria-label="Quitar">${ic('basura')}</button>
+        </div>`).join('')}
       ${F.regalos.map((sb, i) => `<div class="item-fila regalo">
           <div class="if-nom"><b>${ic('regalo')} Regalo</b><small class="suave">del Club</small></div>
           <div class="if-sab"><select style="width:auto" onchange="PF.regalo(${i},this.value)">${SABORES.map(x => `<option value="${x.id}" ${x.id === sb ? 'selected' : ''}>${x.nombre}</option>`).join('')}</select></div>
           <b class="if-precio num">S/0</b>
           <button class="btn mini peligro solo-ic" onclick="PF.quitarRegalo(${i})" title="Quitar" aria-label="Quitar">${ic('basura')}</button>
         </div>`).join('')}
-      ${!F.packs.length && !Object.values(F.sueltos).some(Boolean) && !F.regalos.length ? '<p class="suave" style="margin:10px 0 0">Elige un pack o abre “Frascos sueltos”.</p>' : ''}`;
+      ${!F.packs.length && !Object.values(F.sueltos).some(Boolean) && !F.regalos.length && !F.lineas.length ? '<p class="suave" style="margin:10px 0 0">Elige un pack, un balde o abre “Frascos sueltos”.</p>' : ''}`;
   },
 
   // ---- entrega
@@ -1773,7 +1812,7 @@ const PF = {
   totales() {
     if (F.canje) {
       const subtotal = F.canal === 'b2b' ? r2(F.lineas.reduce((a, l) => a + (+l.cantidad || 0) * (+l.precio_unit || 0), 0))
-        : r2(F.packs.reduce((a, it) => a + (+it.precio || 0), 0) + SABORES.reduce((a, s) => a + (F.sueltos[s.id] || 0) * precioSuelto(s.id), 0));
+        : r2(F.packs.reduce((a, it) => a + (+it.precio || 0), 0) + SABORES.reduce((a, s) => a + (F.sueltos[s.id] || 0) * precioSuelto(s.id), 0) + PF.totalBaldes());
       return { subtotal, ref: 0, otro: 0, descuento: subtotal, canje: subtotal, elegibleRef: false, envio: 0, total: 0, igv: 0 };
     }
     if (F.canal === 'b2b') {
@@ -1786,7 +1825,7 @@ const PF = {
     }
     const packs = F.packs.reduce((a, it) => a + (+it.precio || 0), 0);
     const sueltos = SABORES.reduce((a, s) => a + (F.sueltos[s.id] || 0) * precioSuelto(s.id), 0);
-    const subtotal = r2(packs + sueltos);
+    const subtotal = r2(packs + sueltos + PF.totalBaldes());
     const elegibleRef = !!PF.referente() && PF.esPrimerPedido() && F.packs.length > 0;
     const ref = elegibleRef && F._descRef ? Math.min(CLUB.desc_referido, subtotal) : 0;
     const otro = PF.descExtra(subtotal - ref);
@@ -1826,6 +1865,7 @@ const PF = {
     const lineas = b2b ? F.lineas.map(l => [`${l.cantidad} × ${h(l.nombre || 'producto')}`, soles(l.cantidad * l.precio_unit)]) : [
       ...F.packs.map(it => [`${h(it.nombre)}<br><small>${Object.entries(it.sabores).filter(([, n]) => n).map(([k, n]) => `${n} ${nombreSabor(k)}`).join(', ') || 'elige sabores'}</small>`, soles(it.precio)]),
       ...SABORES.filter(s => F.sueltos[s.id]).map(s => [`${F.sueltos[s.id]} ${s.nombre} suelto`, soles(F.sueltos[s.id] * precioSuelto(s.id))]),
+      ...F.lineas.filter(l => l.cantidad > 0).map(l => [`${l.cantidad} × ${h(l.nombre)}`, soles(l.cantidad * l.precio_unit)]),
       ...F.regalos.map(s => [`${ic('regalo')} 1 ${nombreSabor(s)} (regalo)`, 'S/0']),
     ];
     const pg = pagadoDe(F); const sal = Math.max(0, r2(t.total - pg));
@@ -1850,7 +1890,7 @@ const PF = {
       <div class="fila-r"><span>${F.modalidad_pago === 'credito' && F.fecha_vencimiento ? `Saldo (vence ${fechaCorta(F.fecha_vencimiento)})` : 'Saldo'}</span><b class="num" style="color:${sal > 0 ? 'var(--error)' : 'var(--ok)'}">${soles(sal)}</b></div>`}
       ${F.canje ? `<div class="aviso alerta" style="margin-top:12px">Canje: no suma sellos del Club.</div>` : sellos}
       ${PF.bloqueMargen(t)}
-      ${F.id && inventario().asign[F.id]?.length ? `<p class="suave" style="margin:10px 0 0;font-size:13px"><b>Lotes:</b> ${inventario().asign[F.id].map(a => `${a.n} ${h(nombreSabor(D.productos.get(a.prod)?.sabor))} (${h(a.lote)})`).join(' · ')}</p>` : ''}
+      ${F.id && inventario().asign[F.id]?.length ? `<p class="suave" style="margin:10px 0 0;font-size:13px"><b>Lotes:</b> ${inventario().asign[F.id].map(a => `${a.n} ${h(nombreProd(D.productos.get(a.prod)))} (${h(a.lote)})`).join(' · ')}</p>` : ''}
       ${avisos.length ? `<div class="lista-avisos" style="margin-top:10px">${avisos.map(a => `<div class="aviso ${a[0]}">${a[1]}</div>`).join('')}</div>` : ''}
       <div id="pf-errores"></div>`;
     PF.pintarPagoSaldo(); PF.pintarWA();
@@ -1894,7 +1934,7 @@ const PF = {
     for (const [pid, n] of Object.entries(consumoPedido({ canal: F.canal, items: PF.items() }))) {
       const antes = F.id && !D.pedidos.get(F.id)?.anulado ? (consumoPedido(D.pedidos.get(F.id))[pid] || 0) : 0;
       const hay = stockDe(pid) + antes;
-      if (n > hay) out.push(['alerta', `Stock insuficiente de ${h(nombreSabor(D.productos.get(pid)?.sabor))}: pides ${n} y hay ${Math.max(0, hay)}. Registra la entrada en Inventario.`]);
+      if (n > hay) out.push(['alerta', `Stock insuficiente de ${h(nombreProd(D.productos.get(pid)))}: pides ${n} y hay ${Math.max(0, hay)}. Registra la entrada en Inventario.`]);
     }
     if (F.estado_entrega === 'entregado' && F.canal !== 'b2b' && pagadoDe(F) < PF.totales().total - 0.009) out.push(['alerta', 'Está entregado pero falta el pago: el sello se suma cuando se complete el pago.']);
     return out;
@@ -1941,6 +1981,7 @@ const PF = {
         return { tipo: 'pack', pack_id: it.pack_id, nombre: it.nombre, frascos: it.frascos, tipo_pack: it.tipo_pack, max_almendra: it.max_almendra, precio: it.precio, sabores,
           costo: r2(Object.entries(sabores).reduce((a, [s, n]) => a + n * costoSabor(s), 0)) }; }),
       ...SABORES.filter(s => F.sueltos[s.id]).map(s => ({ tipo: 'suelto', sabor: s.id, cantidad: F.sueltos[s.id], precio_unit: precioSuelto(s.id), costo_unit: costoSabor(s.id) })),
+      ...F.lineas.filter(l => l.cantidad > 0).map(l => ({ tipo: 'linea', producto_id: l.producto_id, nombre: l.nombre, cantidad: +l.cantidad, precio_unit: +l.precio_unit || 0, costo_unit: costoProducto(l.producto_id) })),
       ...F.regalos.map(s => ({ tipo: 'regalo', sabor: s, precio: 0, costo_unit: costoSabor(s) })),
     ];
   },
@@ -1973,7 +2014,7 @@ const PF = {
       if (F.modalidad_pago === 'credito' && !F.fecha_vencimiento) err.push('Pon la fecha de vencimiento del crédito.');
     } else {
       const sueltos = Object.values(F.sueltos).reduce((a, b) => a + b, 0);
-      if (!F.packs.length && !sueltos && !F.regalos.length) err.push('El pedido no tiene mantequillas.');
+      if (!F.packs.length && !sueltos && !F.regalos.length && !F.lineas.length) err.push('El pedido no tiene mantequillas.');
       F.packs.forEach(it => {
         const suma = Object.values(it.sabores).reduce((a, b) => a + b, 0);
         if (suma !== it.frascos) err.push(`${it.nombre}: elige ${it.frascos} sabores (van ${suma}).`);
@@ -2348,12 +2389,11 @@ Díctalo cuando hagas tu pedido por WhatsApp y pagas S/${CLUB.desc_referido} men
     const el = $('#cf-extra');
     if (tipo === 'resena') {
       const peds = pedidosParaResena(CF.id);
-      const bloqueo = puedeResena(CF.id, CLUB.resena_requiere_pedido ? (peds[0]?.id || null) : 'x');
-      if (bloqueo && !bloqueo.startsWith('Elige')) { el.innerHTML = `<div class="aviso alerta" style="margin-top:10px">${h(bloqueo)}</div>`; return; }
-      if (CLUB.resena_requiere_pedido && !peds.length) { el.innerHTML = `<div class="aviso alerta" style="margin-top:10px">No tiene pedidos entregados sin historia/reseña (1 por pedido).</div>`; return; }
+      const bloqueo = puedeResena(CF.id, null);
+      if (bloqueo) { el.innerHTML = `<div class="aviso alerta" style="margin-top:10px">${h(bloqueo)}</div>`; return; }
       el.innerHTML = `<div class="aviso info" style="margin-top:10px"><div class="grid g2">
         <div class="campo"><label>¿Dónde la publicó?</label><select id="cf-red">${Object.entries(REDES).map(([k, t]) => `<option value="${k}">${t}</option>`).join('')}</select></div>
-        <div class="campo"><label>Pedido ${CLUB.resena_requiere_pedido ? '*' : '(opcional)'}</label><select id="cf-ped">${CLUB.resena_requiere_pedido ? '' : '<option value="">—</option>'}${peds.map(p => `<option value="${p.id}">${h(p.numero)} · ${fechaCorta(p.fecha)}</option>`).join('')}</select></div></div>
+        <div class="campo"><label>Pedido <small class="suave">(opcional)</small></label><select id="cf-ped">${opcionesPedResena(peds)}</select></div></div>
         <button class="btn prim mini" style="margin-top:8px" onclick="CLI.guardarResena()">Sumar +1 sello</button></div>`;
     } else {
       el.innerHTML = `<div class="aviso info" style="margin-top:10px">
@@ -2626,7 +2666,6 @@ const VARIABLES_CLUB = [
   ['dias_pausa', 'Días sin comprar para pausa', 'Pasado este tiempo, su siguiente pedido se cobra a precio oficial.'],
   ['tope_leyenda_semana', 'Tope de packs Leyenda por semana', 'Solo avisa; no bloquea.'],
   ['resenas_mes', 'Historias/reseñas que suman sello por mes', '0 = sin límite.'],
-  ['resena_requiere_pedido', 'La historia debe ser de un pedido entregado', '1 = sí (1 por pedido) · 0 = no hace falta pedido.'],
 ];
 
 function renderClub() {
@@ -2682,7 +2721,7 @@ function renderClub() {
       <div class="grid g3" style="align-items:end">
         <div class="campo"><label>Cliente</label><select id="hs-cli" onchange="CLUBV.pedidos()"><option value="">Elige…</option>${[...cs].sort((a, b) => nombreCliente(a).localeCompare(nombreCliente(b))).map(c => `<option value="${c.id}">${h(nombreCliente(c))} · ${h(c.celular)}</option>`).join('')}</select></div>
         <div class="campo"><label>Dónde la publicó</label><select id="hs-red">${Object.entries(REDES).map(([k, t]) => `<option value="${k}">${t}</option>`).join('')}</select></div>
-        <div class="campo"><label>Pedido ${CLUB.resena_requiere_pedido ? '*' : '(opcional)'}</label><select id="hs-ped"><option value="">— elige un cliente —</option></select></div>
+        <div class="campo"><label>Pedido <small class="suave">(opcional)</small></label><select id="hs-ped"><option value="">— elige un cliente —</option></select></div>
       </div>
       <div class="fila" style="margin-top:10px"><button class="btn prim" onclick="CLUBV.registrar()">Sumar +1 sello</button><span id="hs-msg"></span></div>
     </div>
@@ -2707,7 +2746,7 @@ const CLUBV = {
   pedidos() {
     const cid = $('#hs-cli').value; const sel = $('#hs-ped');
     const ps = cid ? pedidosParaResena(cid) : [];
-    sel.innerHTML = (CLUB.resena_requiere_pedido ? '' : '<option value="">—</option>') + (ps.length ? ps.map(p => `<option value="${p.id}">${h(p.numero)} · ${fechaCorta(p.fecha)}</option>`).join('') : (CLUB.resena_requiere_pedido ? '<option value="">sin pedidos entregados disponibles</option>' : ''));
+    sel.innerHTML = cid ? opcionesPedResena(ps) : '<option value="">— elige un cliente —</option>';
   },
   async registrar() {
     const cid = $('#hs-cli').value; if (!cid) return toast('Elige el cliente.');
@@ -2724,6 +2763,12 @@ const CLUBV = {
 function urlFeed() {
   return CFG.supabase?.url ? `${CFG.supabase.url}/functions/v1/catalogo-meta` : '';
 }
+const tarjetaProd = p => `<div class="prod">
+      <img src="${h(fotoDe('productos', p))}" alt="" loading="lazy">
+      <div class="info"><b>${h(p.nombre)}</b><span class="precio">${soles(p.precio)}</span>${tagMedia(p)}
+        ${(() => { const c = costoProducto(p.id); const m = margenDe(+p.precio, c); return `<div class="costo-linea"><span>Costo <b>${soles(c)}</b></span><span>Ganas <b>${soles(+p.precio - c)}</b></span><span class="margen-pill ${claseMargen(m)}">${pct(m)}</span></div>`; })()}
+        <div class="fila">${p.disponible !== false ? '<span class="tag entregado">Con stock</span>' : '<span class="tag anulado">Agotado</span>'} ${p.en_catalogo ? '<span class="tag pagado">En catálogo</span>' : '<span class="tag pausa">Oculto en Meta</span>'} ${p._img_pendiente ? '<span class="tag pendiente">foto sin subir</span>' : ''}</div>
+        <div class="acc"><button class="btn mini" onclick="PR.abrir('${p.id}')">Editar</button><button class="btn mini" onclick="PR.stock('${p.id}')">${p.disponible !== false ? 'Marcar agotado' : 'Hay stock'}</button></div></div></div>`;
 function renderProductos() {
   const ps = lista('productos').sort((a, b) => (a.orden || 0) - (b.orden || 0));
   const packs = lista('packs').sort((a, b) => (a.orden || 0) - (b.orden || 0));
@@ -2732,14 +2777,11 @@ function renderProductos() {
   const feed = urlFeed();
   $('#v-productos').innerHTML = `
     <div class="cab-vista"><div><h2>Productos y promociones</h2><span class="suave">Lo que marques “en catálogo” es lo que ve Meta (Facebook, Instagram y WhatsApp).</span></div>
-      <div class="der"><button class="btn" onclick="PR.abrir()">＋ Producto</button><button class="btn prim" onclick="PK.abrir()">＋ Pack / promoción</button></div></div>
-    <h3>Mantequillas (precio suelto)</h3>
-    <div class="prod-grid">${ps.map(p => `<div class="prod">
-      <img src="${h(fotoDe('productos', p))}" alt="" loading="lazy">
-      <div class="info"><b>${h(p.nombre)}</b><span class="precio">${soles(p.precio)}</span>${tagMedia(p)}
-        ${(() => { const c = costoProducto(p.id); const m = margenDe(+p.precio, c); return `<div class="costo-linea"><span>Costo <b>${soles(c)}</b></span><span>Ganas <b>${soles(+p.precio - c)}</b></span><span class="margen-pill ${claseMargen(m)}">${pct(m)}</span></div>`; })()}
-        <div class="fila">${p.disponible !== false ? '<span class="tag entregado">Con stock</span>' : '<span class="tag anulado">Agotado</span>'} ${p.en_catalogo ? '<span class="tag pagado">En catálogo</span>' : '<span class="tag pausa">Oculto en Meta</span>'} ${p._img_pendiente ? '<span class="tag pendiente">foto sin subir</span>' : ''}</div>
-        <div class="acc"><button class="btn mini" onclick="PR.abrir('${p.id}')">Editar</button><button class="btn mini" onclick="PR.stock('${p.id}')">${p.disponible !== false ? 'Marcar agotado' : 'Hay stock'}</button></div></div></div>`).join('')}</div>
+      <div class="der"><button class="btn" onclick="PR.abrir()">＋ Producto</button><button class="btn" onclick="PR.abrir(null,'balde')">＋ Balde</button><button class="btn prim" onclick="PK.abrir()">＋ Pack / promoción</button></div></div>
+    <h3>Mantequillas de 150 g (precio suelto)</h3>
+    <div class="prod-grid">${ps.filter(p => !esBalde(p)).map(tarjetaProd).join('')}</div>
+    <h3 style="margin-top:26px">Baldes de 1 y 4 kg <small class="suave">ocultos del catálogo · precio a consumidores, a empresas por tramo</small></h3>
+    <div class="prod-grid">${ps.filter(esBalde).map(tarjetaProd).join('') || `<p class="suave">Aún no hay baldes. <a href="#" onclick="PR.abrir(null,'balde');return false">Agregar balde</a></p>`}</div>
 
     <h3 style="margin-top:26px">Packs “Arma tu pack” y precios por nivel</h3>
     <div class="card"><div class="tabla-wrap"><table>
@@ -2887,9 +2929,16 @@ const GAL = {
 
 let PRF = null;
 const PR = {
-  abrir(id) {
+  abrir(id, formato) {
     FOTO_NUEVA = null;
-    PRF = id ? structuredClone(D.productos.get(id)) : { id: 'MP-' + Math.random().toString(36).slice(2, 7).toUpperCase(), nombre: '', sabor: 'mani', descripcion: '', precio: 0, costo: null, disponible: true, en_catalogo: true, orden: lista('productos').length + 1, imagen_url: '' };
+    PRF = id ? structuredClone(D.productos.get(id)) : { id: 'MP-' + Math.random().toString(36).slice(2, 7).toUpperCase(), nombre: '', sabor: 'mani', formato: formato || 'frasco', descripcion: '', precio: 0, costo: null, disponible: true, en_catalogo: formato !== 'balde', orden: lista('productos').length + 1, imagen_url: '' };
+    if (!PRF.formato) PRF.formato = 'frasco';
+    PR.pintar();
+  },
+  // Al cambiar el formato se vuelve a dibujar con lo que ya escribiste.
+  abrirDe() { PR.pintar(); },
+  pintar() {
+    const id = D.productos.get(PRF.id) ? PRF.id : null;
     pagina(`${cabPagina(id ? 'Editar producto' : 'Nuevo producto')}
       <div class="card"><div class="fila" style="align-items:flex-start;gap:18px">
         <div><img id="pr-img" class="img-prev" src="${h(fotoDe('productos', PRF))}" alt=""><br>
@@ -2897,30 +2946,34 @@ const PR = {
           <p class="suave" style="font-size:12.5px;max-width:150px">Cuadrada, mínimo 500×500 px. Se ajusta sola.</p></div>
         <div class="grid g2" style="flex:1">
           <div class="campo" style="grid-column:1/-1"><label>Nombre (título en Meta)</label><input type="text" value="${h(PRF.nombre)}" oninput="PRF.nombre=this.value"></div>
-          <div class="campo"><label>Precio suelto (S/)</label><input type="number" step="0.1" min="0" value="${+PRF.precio}" oninput="PRF.precio=+this.value;PR.margen()"></div>
-          <div class="campo"><label>Costo por frasco (S/) <small class="suave">no se publica</small></label><input type="number" step="0.01" min="0" value="${PRF.costo ?? ''}" oninput="PRF.costo=this.value===''?null:+this.value;PR.margen()"></div>
+          <div class="campo"><label>${esBalde(PRF) ? 'Precio del balde' : 'Precio suelto'} (S/)</label><input type="number" step="0.1" min="0" value="${+PRF.precio}" oninput="PRF.precio=+this.value;PR.margen()"></div>
+          <div class="campo"><label>Costo por ${esBalde(PRF) ? 'balde' : 'frasco'} (S/) <small class="suave">no se publica</small></label><input type="number" step="0.01" min="0" value="${PRF.costo ?? ''}" oninput="PRF.costo=this.value===''?null:+this.value;PR.margen()"></div>
           <div class="campo" style="grid-column:1/-1"><div id="pr-margen"></div></div>
+          <div class="campo"><label>Formato</label><select onchange="PRF.formato=this.value;if(this.value==='balde')PRF.en_catalogo=false;PR.abrirDe()">
+            <option value="frasco" ${!esBalde(PRF) ? 'selected' : ''}>Frasco 150 g (packs y sueltos)</option><option value="balde" ${esBalde(PRF) ? 'selected' : ''}>Balde (1 o 4 kg)</option></select></div>
           <div class="campo"><label>Sabor</label><select onchange="PRF.sabor=this.value;PR.margen()">${SABORES.map(s => `<option value="${s.id}" ${PRF.sabor === s.id ? 'selected' : ''}>${s.nombre}</option>`).join('')}</select></div>
           <div class="campo"><label>ID (SKU)</label><input type="text" value="${h(PRF.id)}" ${id ? 'disabled' : `oninput="PRF.id=this.value.toUpperCase().replace(/[^A-Z0-9-]/g,'')"`}></div>
           <div class="campo"><label>Orden</label><input type="number" value="${+PRF.orden || 0}" oninput="PRF.orden=+this.value"></div>
           <div class="campo" style="grid-column:1/-1"><label>Descripción (la que ve el cliente en Meta)</label><textarea style="min-height:120px" oninput="PRF.descripcion=this.value">${h(PRF.descripcion)}</textarea></div>
           <label class="check"><input type="checkbox" ${PRF.disponible !== false ? 'checked' : ''} onchange="PRF.disponible=this.checked"> Hay stock</label>
           <label class="check"><input type="checkbox" ${PRF.en_catalogo ? 'checked' : ''} onchange="PRF.en_catalogo=this.checked"> Mostrar en el catálogo de Meta</label>
+          ${esBalde(PRF) ? `<div class="campo" style="grid-column:1/-1"><label>Precio a empresas por tramo (S/ por balde, con IGV) <small class="suave">vacío = usa el precio del balde</small></label>
+            <div class="grid g-auto">${TRAMOS_B2B.map(([t, , r], i) => `<div class="campo"><label>${t} <small class="suave">${r}</small></label><input type="number" min="0" step="0.1" value="${PRF.precios_b2b?.[i] ?? ''}" placeholder="${+PRF.precio || ''}" oninput="PRF.precios_b2b=[...(PRF.precios_b2b||[null,null,null,null])];PRF.precios_b2b[${i}]=this.value===''?null:+this.value"></div>`).join('')}</div></div>` : ''}
         </div></div>${GAL.html(PRF)}</div>
       <div class="modal-pie">${id ? `<button class="btn peligro" style="margin-right:auto" onclick="PR.borrar()">Eliminar</button>` : ''}<button class="btn" onclick="volver()">Cancelar</button><button class="btn prim" onclick="PR.guardar()">Guardar</button></div>`);
     PR.margen(); GAL.pintar();
   },
   margen() {
     const el = $('#pr-margen'); if (!el) return;
-    const c = PRF.costo == null || PRF.costo === '' ? (COSTOS_BASE[PRF.sabor] || 0) : +PRF.costo; const pr = +PRF.precio || 0; const m = margenDe(pr, c);
-    el.innerHTML = `<div class="costo-linea grande"><span>Ganas <b>${soles(pr - c)}</b> por frasco suelto</span><span class="margen-pill ${claseMargen(m)}">margen ${pct(m)}</span>
+    const c = PRF.costo == null || PRF.costo === '' ? (esBalde(PRF) ? 0 : COSTOS_BASE[PRF.sabor] || 0) : +PRF.costo; const pr = +PRF.precio || 0; const m = margenDe(pr, c);
+    el.innerHTML = `<div class="costo-linea grande"><span>Ganas <b>${soles(pr - c)}</b> por ${esBalde(PRF) ? 'balde' : 'frasco suelto'}</span><span class="margen-pill ${claseMargen(m)}">margen ${pct(m)}</span>
       <small class="suave">El costo sale del Centro de costos. Si cambia, actualízalo aquí: los pedidos nuevos usan el costo nuevo y los ya guardados conservan el suyo.</small></div>`;
   },
   async guardar() {
     if (!PRF.nombre.trim()) return alert('Falta el nombre.');
     if (!PRF.id) return alert('Falta el ID.');
     const esNuevo = !D.productos.get(PRF.id);
-    if (esNuevo && lista('productos').some(p => p.sabor === PRF.sabor)) { if (!confirm(`Ya hay un producto de sabor ${nombreSabor(PRF.sabor)}. El precio suelto que usa el pedido será el del primero. ¿Guardar igual?`)) return; }
+    if (esNuevo && !esBalde(PRF) && lista('productos').some(p => p.sabor === PRF.sabor && !esBalde(p))) { if (!confirm(`Ya hay un producto de sabor ${nombreSabor(PRF.sabor)}. El precio suelto que usa el pedido será el del primero. ¿Guardar igual?`)) return; }
     const prev = D.productos.get(PRF.id);
     const rec = { ...(prev || {}), ...PRF, _borrar_media: [...(prev?._borrar_media || []), ...(PRF._borrar_media || [])] };
     await guardarFoto('productos', rec);
@@ -3024,7 +3077,8 @@ function inventario() {
   return INV;
 }
 const stockDe = pid => inventario().stock[pid] || 0;
-const stockMin = pid => +(CFG.stock_min?.[pid] ?? 10);
+const stockMin = pid => +(CFG.stock_min?.[pid] ?? (esBalde(D.productos.get(pid)) ? 0 : 10));
+const stockBajo = p => stockDe(p.id) <= stockMin(p.id) && (stockMin(p.id) > 0 || !esBalde(p));
 const lotesDe = pid => Object.values(inventario().lotes).filter(L => L.prod === pid);
 
 const UIINV = { prod: 'todos' };
@@ -3033,7 +3087,7 @@ function renderInventario() {
   const ps = lista('productos').sort((a, b) => (a.orden || 0) - (b.orden || 0));
   const en30 = sumarDias(hoy(), 30);
   const porVencer = Object.values(inv.lotes).filter(L => L.queda > 0 && L.vence && L.vence <= en30).sort((a, b) => a.vence.localeCompare(b.vence));
-  const bajos = ps.filter(p => stockDe(p.id) <= stockMin(p.id));
+  const bajos = ps.filter(stockBajo);
   const movs = [
     ...lista('movimientos_stock').map(m => ({ fecha: m.fecha, prod: m.producto_id, n: +m.cantidad, lote: m.lote || '', que: `${m.tipo === 'entrada' ? 'Entrada' : m.tipo === 'salida' ? 'Salida' : 'Ajuste por conteo'} · ${m.motivo || ''}`, nota: m.nota, id: m.id, orden: m.creado_en })),
     ...inv.salidasPedidos.map(s => ({ fecha: s.fecha, prod: s.prod, n: -s.n, lote: s.lotes.map(l => `${l.lote} (${l.n})`).join(', '), que: `Pedido ${s.pedido.numero}`, pedido: s.pedido.id, orden: s.pedido.creado_en })),
@@ -3043,15 +3097,15 @@ function renderInventario() {
       <div class="der"><button class="btn" onclick="INVF.abrir('salida')">− Salida</button><button class="btn" onclick="INVF.abrir('ajuste')">Conteo / ajuste</button><button class="btn prim" onclick="INVF.abrir('entrada')">＋ Entrada</button></div></div>
     <div class="kpis">
       <div class="kpi"><small>Frascos en stock</small><b class="num">${ps.reduce((a, p) => a + Math.max(0, stockDe(p.id)), 0)}</b><em>${plural(ps.length, 'producto')}</em></div>
-      <div class="kpi"><small>Bajo el mínimo</small><b class="num" style="color:${bajos.length ? 'var(--error)' : 'inherit'}">${bajos.length}</b><em>${bajos.map(p => nombreSabor(p.sabor)).join(', ') || 'todo bien'}</em></div>
+      <div class="kpi"><small>Bajo el mínimo</small><b class="num" style="color:${bajos.length ? 'var(--error)' : 'inherit'}">${bajos.length}</b><em>${bajos.map(p => nombreProd(p)).join(', ') || 'todo bien'}</em></div>
       <div class="kpi"><small>Lotes por vencer (30 días)</small><b class="num" style="color:${porVencer.length ? 'var(--alerta)' : 'inherit'}">${porVencer.length}</b><em>${porVencer.reduce((a, L) => a + L.queda, 0)} frascos</em></div>
       <div class="kpi"><small>Salieron este mes en pedidos</small><b class="num">${inv.salidasPedidos.filter(s => s.fecha?.startsWith(hoy().slice(0, 7))).reduce((a, s) => a + s.n, 0)}</b><em>frascos</em></div>
     </div>
     <div class="grid g2">
       ${ps.map(p => { const st = stockDe(p.id); const ls = lotesDe(p.id).filter(L => L.queda !== 0).sort((a, b) => (a.vence || a.fecha).localeCompare(b.vence || b.fecha)); return `<div class="card">
         <div class="fila"><img src="${h(fotoDe('productos', p))}" alt="" style="width:56px;height:56px;border-radius:10px;object-fit:cover">
-          <div style="flex:1"><b style="font-size:17px">${h(nombreSabor(p.sabor))}</b><br><small class="suave">${h(p.nombre)}</small></div>
-          <div style="text-align:right"><b class="titan" style="font-size:30px;color:${st <= stockMin(p.id) ? 'var(--error)' : 'var(--texto)'}">${st}</b><br><small>mínimo <input type="number" min="0" value="${stockMin(p.id)}" style="width:64px;padding:3px 6px" onchange="INVF.minimo('${p.id}',this.value)"></small></div></div>
+          <div style="flex:1"><b style="font-size:17px">${h(nombreProd(p))}</b><br><small class="suave">${h(p.nombre)}</small></div>
+          <div style="text-align:right"><b class="titan" style="font-size:30px;color:${stockBajo(p) ? 'var(--error)' : 'var(--texto)'}">${st}</b><br><small>mínimo <input type="number" min="0" value="${stockMin(p.id)}" style="width:64px;padding:3px 6px" onchange="INVF.minimo('${p.id}',this.value)"></small></div></div>
         ${st < 0 ? '<div class="aviso error" style="margin-top:8px">Stock negativo: hay pedidos sin entrada registrada. Registra la entrada (o el inventario inicial).</div>' : ''}
         ${ls.length ? `<table style="margin-top:10px"><thead><tr><th>Lote</th><th>Entró</th><th>Vence</th><th class="der">Queda</th></tr></thead><tbody>
           ${ls.map(L => `<tr><td><span class="codigo">${h(L.lote)}</span></td><td>${L.fecha ? fechaCorta(L.fecha) : '—'}</td><td>${L.vence ? `<span style="color:${L.vence < hoy() ? 'var(--error)' : L.vence <= en30 ? 'var(--alerta)' : 'inherit'}">${fechaCorta(L.vence)}</span>` : '—'}</td><td class="der num"><b>${L.queda}</b> <small>/ ${L.entro}</small></td></tr>`).join('')}
@@ -3061,9 +3115,9 @@ function renderInventario() {
     </div>
     <div class="card" style="margin-top:16px">
       <div class="fila" style="margin-bottom:10px"><h3 style="margin:0">Movimientos</h3>
-        <select style="width:220px;margin-left:auto" onchange="UIINV.prod=this.value;renderInventario()"><option value="todos">Todos los productos</option>${ps.map(p => `<option value="${p.id}" ${UIINV.prod === p.id ? 'selected' : ''}>${h(nombreSabor(p.sabor))}</option>`).join('')}</select></div>
+        <select style="width:220px;margin-left:auto" onchange="UIINV.prod=this.value;renderInventario()"><option value="todos">Todos los productos</option>${ps.map(p => `<option value="${p.id}" ${UIINV.prod === p.id ? 'selected' : ''}>${h(nombreProd(p))}</option>`).join('')}</select></div>
       <div class="tabla-wrap"><table><thead><tr><th>Fecha</th><th>Producto</th><th>Movimiento</th><th>Lote</th><th class="der">Cantidad</th><th></th></tr></thead><tbody>
-        ${movs.length ? movs.map(m => `<tr><td>${fechaCorta(m.fecha)}</td><td>${h(nombreSabor(D.productos.get(m.prod)?.sabor) || m.prod)}</td>
+        ${movs.length ? movs.map(m => `<tr><td>${fechaCorta(m.fecha)}</td><td>${h(nombreProd(D.productos.get(m.prod)) || m.prod)}</td>
           <td>${m.pedido ? `<a href="#" onclick="PF.abrir('${m.pedido}');return false">${h(m.que)}</a>` : h(m.que)}${m.nota ? `<br><small>${h(m.nota)}</small>` : ''}</td>
           <td><small>${h(m.lote)}</small></td><td class="der num"><b style="color:${m.n > 0 ? 'var(--ok)' : 'var(--error)'}">${m.n > 0 ? '+' : ''}${m.n}</b></td>
           <td class="der">${m.id ? `<button class="btn mini peligro" onclick="INVF.borrar('${m.id}')">Quitar</button>` : ''}</td></tr>`).join('') : '<tr><td colspan="6" class="vacio">Sin movimientos. Empieza con <b>＋ Entrada</b> (motivo “Inventario inicial”).</td></tr>'}
@@ -3086,7 +3140,7 @@ const INVF = {
       <div class="card" style="max-width:820px">
         <div class="chips" style="margin-bottom:14px">${[['entrada', '＋ Entrada'], ['salida', '− Salida'], ['ajuste', 'Conteo / ajuste']].map(([k, x]) => `<button class="chip ${t === k ? 'activo' : ''}" onclick="INVF.abrir('${k}',MF.producto_id)">${x}</button>`).join('')}</div>
         <div class="grid g2">
-          <div class="campo"><label>Producto *</label><select onchange="MF.producto_id=this.value;INVF.pintar()">${ps.map(p => `<option value="${p.id}" ${MF.producto_id === p.id ? 'selected' : ''}>${h(nombreSabor(p.sabor))} · stock ${stockDe(p.id)}</option>`).join('')}</select></div>
+          <div class="campo"><label>Producto *</label><select onchange="MF.producto_id=this.value;INVF.pintar()">${ps.map(p => `<option value="${p.id}" ${MF.producto_id === p.id ? 'selected' : ''}>${h(nombreProd(p))} · stock ${stockDe(p.id)}</option>`).join('')}</select></div>
           <div class="campo"><label>Fecha *</label><input type="date" value="${h(MF.fecha)}" onchange="MF.fecha=this.value"></div>
           ${t === 'entrada' ? `
             <div class="campo"><label>N.° de lote * <small class="suave">(si repites uno existente, se suma a ese lote)</small></label><input type="text" list="inv-lotes" value="${h(MF.lote)}" oninput="MF.lote=this.value.toUpperCase().trim();INVF.infoLote()">

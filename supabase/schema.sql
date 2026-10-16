@@ -8,6 +8,8 @@ create table if not exists public.productos (
   id text primary key,
   nombre text not null,
   sabor text,
+  formato text not null default 'frasco',      -- frasco (150 g, packs y sueltos) o balde (1 o 4 kg)
+  precios_b2b jsonb,                           -- empresas, con IGV: [Comercial 1-3, Mayorista 4-6, Distribuidor 7-9, Exclusivo 10+]
   descripcion text,
   precio numeric(10,2) not null default 0,
   disponible boolean not null default true,
