@@ -20,6 +20,11 @@ Todo es HTML, CSS y JavaScript plano (sin frameworks ni instalación). Crear o e
 
 ## Clientes
 
+- **Nombres**: al guardar, nombre, apellido y persona de contacto quedan con mayúscula inicial (“adriana anaya” → “Adriana Anaya”).
+- **Sin repetidos**: no se puede registrar a una persona con el mismo nombre y apellido, ni con un celular que ya existe; el panel ofrece usar la ficha existente.
+- **Unir con otro cliente** (en la ficha): si alguien quedó registrado dos veces, pasa sus pedidos, sellos y referidos a la otra ficha y elimina la repetida.
+- **Eliminar**: desde la ficha o con el ícono de basura en la lista. Los pedidos se conservan.
+- **Cambiar cliente de un pedido**: en un pedido ya guardado, **Cambiar cliente** lo pasa a otra ficha sin tocar los precios cobrados.
 - **Distrito**: lista desplegable (43 distritos de Lima, 7 del Callao y “Provincia”).
 - **Correo**: opcional, se valida el formato.
 - **Dirección de envío**: al crear un cliente es la misma que la dirección, salvo que desmarques “Es la misma dirección”.

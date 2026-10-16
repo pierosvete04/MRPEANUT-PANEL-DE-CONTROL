@@ -97,6 +97,8 @@ const h = v => String(v ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&
 const r2 = n => Math.round((+n || 0) * 100) / 100;
 const soles = n => { n = r2(n); return 'S/' + (n % 1 ? n.toFixed(2) : n.toFixed(0)); };
 const norm = s => String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
+// Nombres de personas: "aDRIANA  anaya" -> "Adriana Anaya".
+const nombrePropio = s => String(s || '').trim().replace(/\s+/g, ' ').toLocaleLowerCase('es').replace(/(^|[\s'-])(\p{L})/gu, (m, a, b) => a + b.toLocaleUpperCase('es'));
 const soloDigitos = s => String(s || '').replace(/\D/g, '');
 const celNorm = s => soloDigitos(s).slice(-9);
 const uid = () => (crypto.randomUUID ? crypto.randomUUID() :
@@ -541,6 +543,11 @@ function buscarClientes(q, limite = 8, tipo = null) {
   })()).slice(0, limite);
 }
 const clientePorCelular = (cel, excluir) => { const n = celNorm(cel); return n.length === 9 ? lista('clientes').find(c => c.id !== excluir && celNorm(c.celular) === n) : null; };
+// Misma persona escrita dos veces (mismo nombre y apellido, sin importar tildes ni mayúsculas).
+const clientePorNombre = (nombre, apellido, excluir) => {
+  const k = norm(`${nombre} ${apellido}`).replace(/\s+/g, ' ');
+  return k.length > 2 ? lista('clientes').find(c => c.id !== excluir && !esEmpresa(c) && norm(nombreCliente(c)).replace(/\s+/g, ' ') === k) : null;
+};
 
 // ------------------------------------------------------------------ páginas de detalle
 // Crear/editar pedido, cliente, producto o pack se abre como una página dentro del panel
@@ -1318,10 +1325,14 @@ const PF = {
   },
   fijarCliente(id, pintar = true) {
     const c = D.clientes.get(id); if (!c) return;
+    const volvio = F.id && id === F._cliOrig;
     F.cliente_id = id; F._modo = 'sel';
-    F.nivel_precio = F.canal === 'b2b' ? 'oficial' : nivelParaCobrar(id);
-    F.direccion_envio = c.direccion_envio || c.direccion || '';
-    PF.recalcularPrecios();
+    // En un pedido ya guardado solo se corrige el cliente: los precios cobrados se mantienen.
+    if (!F.id) {
+      F.nivel_precio = F.canal === 'b2b' ? 'oficial' : nivelParaCobrar(id);
+      PF.recalcularPrecios();
+    }
+    if (!volvio) F.direccion_envio = c.direccion_envio || c.direccion || F.direccion_envio || '';
     const e = statsDe(id);
     if (!F.id && F.canal !== 'b2b' && c.regalo_agendado && e?.regalosPend && !F.regalos.length) { F.regalos.push(e.favorito || 'mani'); toast(`Se agregó el regalo agendado de ${c.nombre}.`); }
     if (pintar) { PF.pintarCliente(); PF.pintarItems(); PF.pintarResumen(); }
@@ -1338,7 +1349,7 @@ const PF = {
     PF.recalcularPrecios(); PF.pintarCliente(); PF.pintarItems(); PF.pintarResumen();
     setTimeout(() => $('#pf-n-nombre')?.focus(), 30);
   },
-  cambiar() { F._modo = 'buscar'; F.cliente_id = null; F._q = ''; PF.pintarCliente(); PF.pintarResumen(); setTimeout(() => $('#pf-q')?.focus(), 30); },
+  cambiar() { if (F.id && F.cliente_id) F._cliOrig = F.cliente_id; F._modo = 'buscar'; F.cliente_id = null; F._q = ''; PF.pintarCliente(); PF.pintarResumen(); setTimeout(() => $('#pf-q')?.focus(), 30); },
   buscar(q) {
     F._q = q; const tipo = F.canal === 'b2b' ? 'empresa' : 'persona';
     const res = buscarClientes(q, 8, tipo); const C = club();
@@ -1349,7 +1360,10 @@ const PF = {
   setN(k, v) {
     F._nuevo[k] = v;
     if (k === 'direccion' && F._nuevo._mismaDir) { F._nuevo.direccion_envio = v; const el = $('#pf-n-envio'); if (el) el.value = v; }
-    if (k === 'celular') { const dup = clientePorCelular(v); $('#pf-dup').innerHTML = dup ? `<div class="aviso alerta" style="margin-top:8px">Ese celular ya es de <b>${h(nombreCliente(dup))}</b>. <a href="#" onclick="PF.fijarCliente('${dup.id}');return false">Usar ese cliente</a></div>` : ''; }
+    if (['celular', 'nombre', 'apellido'].includes(k)) {
+      const n = F._nuevo; const porCel = clientePorCelular(n.celular); const dup = porCel || (F.canal !== 'b2b' && clientePorNombre(n.nombre, n.apellido));
+      const el = $('#pf-dup'); if (el) el.innerHTML = dup ? `<div class="aviso alerta" style="margin-top:8px">${porCel ? 'Ese celular ya es de' : 'Ya existe'} <b>${h(nombreCliente(dup))}</b>${porCel ? '' : ` (${h(dup.celular)})`}. <a href="#" onclick="PF.fijarCliente('${dup.id}');return false">Usar ese cliente</a></div>` : '';
+    }
     if (k === 'nombre' || k === 'contacto') PF.pintarWA();
   },
   buscarRef(q) {
@@ -1413,7 +1427,9 @@ const PF = {
     };
     const inp = (k, t, extra = '', full = false) => `<div class="campo" ${full ? 'style="grid-column:1/-1"' : ''}><label>${t}</label><input type="text" ${k === 'nombre' ? 'id="pf-n-nombre"' : ''} value="${h(F._nuevo[k])}" oninput="PF.setN('${k}',this.value)" ${extra}></div>`;
     if (F._modo === 'buscar') {
-      el.innerHTML = `<div class="campo"><label>${b2b ? 'Busca por nombre, RUC, contacto o celular' : 'Busca por celular, nombre o código'}</label>
+      const orig = F.id && D.clientes.get(F._cliOrig);
+      el.innerHTML = `${orig ? `<div class="aviso info" style="margin-bottom:12px">Elige a quién pasa el pedido ${h(F.numero)}. Se guarda al darle <b>Guardar</b>. <a href="#" onclick="PF.fijarCliente('${orig.id}');return false">Dejarlo en ${h(nombreCliente(orig))}</a></div>` : ''}
+        <div class="campo"><label>${b2b ? 'Busca por nombre, RUC, contacto o celular' : 'Busca por celular, nombre o código'}</label>
         <input type="search" id="pf-q" placeholder="${b2b ? 'Ej.: Café Central o 20601234567' : 'Ej.: 987654321 o Andrea'}" value="${h(F._q)}" oninput="PF.buscar(this.value)" autocomplete="off"></div>
         <div id="pf-sug"></div>
         <button class="btn" style="margin-top:10px" onclick="PF.nuevo()">＋ ${b2b ? 'Empresa nueva' : 'Cliente nuevo'}</button>`;
@@ -1443,7 +1459,7 @@ const PF = {
             : `${h(c.celular)} · ${plural(e.total, 'sello')} · ${plural(e.ventas.length, 'compra')} · código <span class="codigo">${h(c.codigo)}</span>`}</span>
           ${(() => { const otros = r2(e.pedidos.filter(x => x.id !== F.id).reduce((a, x) => a + saldoDe(x), 0)); return otros > 0 ? `<br><span class="tag pendiente">Debe ${soles(otros)} de otros pedidos</span>` : ''; })()}
 </div>
-          ${F.id ? '' : `<button class="btn mini" onclick="PF.cambiar()">Cambiar</button>`}
+          <button class="btn mini" onclick="PF.cambiar()" ${F.id ? 'title="Pasar este pedido a otro cliente"' : ''}>${F.id ? 'Cambiar cliente' : 'Cambiar'}</button>
         </div>
         <div class="campo" style="margin-top:12px"><label>Dirección de envío de este pedido</label>
           <input type="text" value="${h(F.direccion_envio)}" placeholder="opcional" oninput="F.direccion_envio=this.value"></div>
@@ -1878,6 +1894,8 @@ const PF = {
       if (b2b && n.ruc && soloDigitos(n.ruc).length !== 11) err.push('El RUC debe tener 11 dígitos.');
       if (celNorm(n.celular).length !== 9) err.push('El celular debe tener 9 dígitos.');
       else if (clientePorCelular(n.celular)) err.push('Ese celular ya está registrado: usa el cliente existente.');
+      const mismo = !b2b && clientePorNombre(n.nombre, n.apellido);
+      if (mismo) err.push(`${nombreCliente(mismo)} ya está registrada (celular ${mismo.celular}): usa ese cliente, no se puede repetir.`);
       if (!n.distrito) err.push('Elige el distrito.');
       if (n.correo.trim() && !esCorreo(n.correo)) err.push('El correo no es válido.');
     }
@@ -1912,8 +1930,8 @@ const PF = {
     if (F._modo === 'nuevo') {
       const n = F._nuevo;
       const c = {
-        id: uid(), tipo_cliente: b2b ? 'empresa' : 'persona', nombre: n.nombre.trim(), apellido: b2b ? '' : n.apellido.trim(), celular: celNorm(n.celular), correo: n.correo.trim().toLowerCase(), distrito: n.distrito,
-        razon_social: n.razon_social.trim(), ruc: soloDigitos(n.ruc), contacto: n.contacto.trim(), tipo_negocio: n.tipo_negocio,
+        id: uid(), tipo_cliente: b2b ? 'empresa' : 'persona', nombre: b2b ? n.nombre.trim() : nombrePropio(n.nombre), apellido: b2b ? '' : nombrePropio(n.apellido), celular: celNorm(n.celular), correo: n.correo.trim().toLowerCase(), distrito: n.distrito,
+        razon_social: n.razon_social.trim(), ruc: soloDigitos(n.ruc), contacto: nombrePropio(n.contacto), tipo_negocio: n.tipo_negocio,
         direccion: n.direccion.trim(), direccion_envio: (n._mismaDir ? n.direccion : n.direccion_envio).trim(), referencia: n.referencia.trim(),
         referido_por: b2b ? null : (n.referido_por || null), nivel_manual: null, notas: '',
       };
@@ -2030,7 +2048,8 @@ function renderClientes() {
           <td class="der num">${e.saldo > 0 ? `<b style="color:var(--error)">${soles(e.saldo)}</b>` : '<small class="suave">—</small>'}</td>
           <td>${e.ultima ? `${fechaCorta(e.ultima.toISOString())}<br><small>hace ${plural(e.dias, 'día')}</small>` : '<small>sin compras</small>'}</td>
           <td class="der acciones-fila"><button class="btn mini wa solo-ic" title="Abrir WhatsApp" aria-label="WhatsApp" onclick="event.stopPropagation();abrirWhatsApp('${h(c.celular)}','')">${ic('wa')}</button>
-            <button class="btn mini" title="Nuevo pedido para este cliente" onclick="event.stopPropagation();PF.abrir(null,'${c.id}')">${ic('mas-circ')} Pedido</button></td></tr>`; }).join('')
+            <button class="btn mini" title="Nuevo pedido para este cliente" onclick="event.stopPropagation();PF.abrir(null,'${c.id}')">${ic('mas-circ')} Pedido</button>
+            <button class="btn mini peligro solo-ic" title="Eliminar cliente" aria-label="Eliminar cliente" onclick="event.stopPropagation();CLI.borrar('${c.id}')">${ic('basura')}</button></td></tr>`; }).join('')
           : `<tr><td colspan="8" class="vacio"><div class="vacio-caja">${ic('clientes', 'g')}<b>${delTipo.length ? 'No hay clientes con este filtro' : emp ? 'Todavía no hay empresas' : 'Todavía no hay clientes'}</b>
             ${delTipo.length ? '' : `<button class="btn prim" onclick="CLI.abrir(null, UI.cli.tipo)">${ic('mas-circ')} ${emp ? 'Nueva empresa' : 'Nuevo cliente'}</button>`}</div></td></tr>`}</tbody>
       </table></div>
@@ -2151,8 +2170,10 @@ const CLI = {
       ${cab}
       <div class="grid ${nuevo ? '' : 'g2'}">${datos}${lado}</div>
       ${nuevo ? '' : CLI.historial(e, emp)}
+      <div id="cf-unir"></div>
       <div class="modal-pie">
-        ${nuevo ? '' : `<button class="btn peligro" style="margin-right:auto" onclick="CLI.borrar()">Eliminar</button>
+        ${nuevo ? '' : `<button class="btn peligro" onclick="CLI.borrar()">Eliminar</button>
+        <button class="btn" style="margin-right:auto" onclick="CLI.formUnir()" title="Para clientes registrados dos veces">Unir con otro cliente</button>
         <button class="btn wa" onclick="abrirWhatsApp(CF.celular,'')">WhatsApp</button>
         <button class="btn oscuro" onclick="CLI.guardar(true)">Guardar y crear pedido</button>`}
         <button class="btn" onclick="volver()">Volver</button>
@@ -2314,6 +2335,11 @@ Díctalo cuando hagas tu pedido por WhatsApp y pagas S/${CLUB.desc_referido} men
     const codigo = limpiarCodigo(CF.codigo);
     if (!emp && codigo && codigoUsado(codigo, CF.id)) err.push(`El código ${codigo} ya lo usa otro cliente.`);
     if (err.length) return alert(err.join('\n'));
+    const mismo = !emp && clientePorNombre(CF.nombre, CF.apellido, CF.id);
+    if (mismo) {
+      if (confirm(`${nombreCliente(mismo)} ya está registrada (celular ${mismo.celular}). No se puede repetir un cliente.\n\n¿Abrir su ficha?${D.clientes.get(CF.id) ? '\n\nSi esta ficha es la repetida, usa «Unir con otro cliente».' : ''}`)) CLI.abrir(mismo.id);
+      return;
+    }
     const previo = D.clientes.get(CF.id);
     const rec = { ...(previo || {}), ...CF };
     ['_mismaDir', '_verDir', '_verMas', '_editCod'].forEach(k => delete rec[k]);
@@ -2321,6 +2347,8 @@ Díctalo cuando hagas tu pedido por WhatsApp y pagas S/${CLUB.desc_referido} men
     rec.ruc = soloDigitos(rec.ruc);
     ['nombre', 'apellido', 'direccion', 'direccion_envio', 'distrito', 'referencia', 'razon_social', 'contacto'].forEach(k => { rec[k] = String(rec[k] || '').trim(); });
     rec.correo = String(rec.correo || '').trim().toLowerCase();
+    if (emp) rec.contacto = nombrePropio(rec.contacto);
+    else { rec.nombre = nombrePropio(rec.nombre); rec.apellido = nombrePropio(rec.apellido); }
     if (CF._mismaDir || !rec.direccion_envio) rec.direccion_envio = rec.direccion;
     rec.codigo = emp ? '' : (codigo || generarCodigo(rec.nombre, rec.apellido, rec.id));
     if (emp) { rec.nivel_manual = null; rec.referido_por = null; }
@@ -2328,10 +2356,43 @@ Díctalo cuando hagas tu pedido por WhatsApp y pagas S/${CLUB.desc_referido} men
     toast('Cliente guardado.');
     if (conPedido) PF.abrir(null, rec.id); else volver();
   },
-  async borrar() {
-    const n = lista('pedidos').filter(p => p.cliente_id === CF.id).length;
-    if (!confirm(`¿Eliminar a ${nombreCliente(CF)}?${n ? ` Tiene ${plural(n, 'pedido')}; los pedidos se conservan.` : ''}`)) return;
-    await eliminar('clientes', CF.id); volver();
+  async borrar(id) {
+    const c = id ? D.clientes.get(id) : CF;
+    const n = lista('pedidos').filter(p => p.cliente_id === c.id).length;
+    if (!confirm(`¿Eliminar a ${nombreCliente(c)}?${n ? `\n\nTiene ${plural(n, 'pedido')}; los pedidos se conservan sin cliente. Si es un cliente repetido, mejor ábrelo y usa «Unir con otro cliente» para no perder sus pedidos.` : ''}`)) return;
+    await eliminar('clientes', c.id);
+    toast(`${nombreCliente(c)} eliminado.`);
+    if (id) renderClientes(); else volver();
+  },
+  // Cliente registrado dos veces: todo lo de esta ficha pasa a la otra y esta se elimina.
+  formUnir() {
+    const tipo = CF.tipo_cliente || 'persona';
+    const otros = lista('clientes').filter(c => c.id !== CF.id && (c.tipo_cliente || 'persona') === tipo).sort((a, b) => nombreCliente(a).localeCompare(nombreCliente(b)));
+    const k = norm(nombreCliente(CF));
+    const sugerido = otros.find(c => norm(nombreCliente(c)) === k);
+    $('#cf-unir').innerHTML = `<div class="card" style="margin-top:16px"><h3>Unir con otro cliente</h3>
+      <p class="suave" style="margin-top:-6px">Si <b>${h(nombreCliente(CF))}</b> se registró dos veces, elige su otra ficha. Sus pedidos, sellos y amigos referidos pasan a esa ficha y esta se elimina. Se queda el celular y los datos de la ficha que elijas (lo que le falte se completa con esta).</p>
+      <div class="fila"><select id="cf-unir-sel" style="flex:1;min-width:220px"><option value="">Elige la ficha que se queda…</option>
+        ${otros.map(c => `<option value="${c.id}" ${sugerido?.id === c.id ? 'selected' : ''}>${h(nombreCliente(c))} · ${h(c.celular)} · ${plural(lista('pedidos').filter(p => p.cliente_id === c.id).length, 'pedido')}</option>`).join('')}</select>
+        <button class="btn prim" onclick="CLI.unir()">Unir</button><button class="btn" onclick="$('#cf-unir').innerHTML=''">Cancelar</button></div></div>`;
+    $('#cf-unir').scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  },
+  async unir() {
+    const dest = D.clientes.get($('#cf-unir-sel').value); const src = D.clientes.get(CF.id);
+    if (!dest || !src) return toast('Elige la ficha que se queda.');
+    const peds = [...D.pedidos.values()].filter(p => p.cliente_id === src.id);
+    if (!confirm(`¿Unir a ${nombreCliente(src)} (${src.celular}) con ${nombreCliente(dest)} (${dest.celular})?\n\n${plural(peds.filter(p => !p.eliminado).length, 'pedido')} pasan a ${nombreCliente(dest)} y esta ficha se elimina. No se puede deshacer.`)) return;
+    for (const p of peds) { p.cliente_id = dest.id; await guardar('pedidos', p); }
+    for (const s of [...D.sellos_extra.values()].filter(s => s.cliente_id === src.id)) { s.cliente_id = dest.id; await guardar('sellos_extra', s); }
+    for (const c of [...D.clientes.values()].filter(c => c.referido_por === src.id && c.id !== dest.id)) { c.referido_por = dest.id; await guardar('clientes', c); }
+    ['correo', 'direccion', 'direccion_envio', 'referencia', 'razon_social', 'ruc', 'contacto', 'tipo_negocio', 'nivel_manual'].forEach(k => { if (!String(dest[k] || '').trim() && String(src[k] || '').trim()) dest[k] = src[k]; });
+    if (String(src.notas || '').trim() && !String(dest.notas || '').includes(src.notas.trim())) dest.notas = [dest.notas, src.notas].map(x => String(x || '').trim()).filter(Boolean).join('\n');
+    if (!dest.referido_por && src.referido_por && src.referido_por !== dest.id) dest.referido_por = src.referido_por;
+    if (src.regalo_agendado) dest.regalo_agendado = true;
+    await guardar('clientes', dest);
+    await eliminar('clientes', src.id);
+    toast(`Listo: ${nombreCliente(dest)} quedó en una sola ficha.`);
+    CLI.abrir(dest.id);
   },
   exportar() {
     const C = club();
