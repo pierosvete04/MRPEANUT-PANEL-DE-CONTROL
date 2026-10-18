@@ -91,9 +91,9 @@ Se puede elegir otro mensaje y editar el texto antes de enviarlo.
 | Descuento al amigo referido | S/3 | En su primer pack |
 | Días sin comprar para pausa | 60 | Su siguiente pedido se cobra a precio oficial |
 | Tope de packs Leyenda por semana | 2 | Solo avisa |
-| Historias/reseñas que suman por mes | 1 | 0 = sin límite |
+| Historias/reseñas que suman por pedido | 5 | Cada historia suma 1 sello · 0 = sin límite |
 
-Reglas fijas: un pedido B2C con pack, **pagado y entregado**, suma 1 sello (los frascos sueltos y el B2B no suman). El amigo referido da +1 sello cuando su primer pack queda pagado y entregado. Las historias y reseñas las registra el encargado a mano; el pedido es opcional (para clientas antiguas sin compra registrada se elige “Sin pedido”), y si se elige uno, es 1 historia por pedido.
+Reglas fijas: todo pedido B2C (pack, frascos sueltos o productos), **pagado y entregado**, suma 1 sello (el B2B y los canjes no suman). El amigo referido da +1 sello cuando su primer pack queda pagado y entregado. Las historias y reseñas las registra el encargado a mano; el pedido es opcional (para clientas antiguas sin compra registrada se elige “Sin pedido”), y si se elige uno, suman hasta 5 historias por pedido (se cambia en Variables del Club).
 
 ## Abrirlo e instalarlo
 

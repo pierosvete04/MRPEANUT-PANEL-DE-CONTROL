@@ -50,7 +50,7 @@ const CLUB_BASE = {
   desc_referido: 3,           // S/ de descuento al amigo en su primer pack
   dias_pausa: 60,             // sin compras en 60 días: nivel en pausa
   tope_leyenda_semana: 2,     // máximo de packs Leyenda por semana
-  resenas_mes: 1,             // historias/reseñas que suman sello por mes
+  historias_pedido: 5,        // historias/reseñas que suman sello por cada pedido
 };
 
 // Costo de producción por frasco de 150 g (Centro de costos, septiembre 2026). Se edita en Productos.
@@ -138,7 +138,7 @@ const plural = (n, s, p) => `${n} ${n === 1 ? s : (p || s + 's')}`;
 const numeroWa = cel => { let d = soloDigitos(cel); if (d.length === 9) d = '51' + d; return d; };
 const waLink = (cel, txt) => `https://wa.me/${numeroWa(cel)}${txt ? '?text=' + encodeURIComponent(txt) : ''}`;
 
-// Abre WhatsApp de escritorio, WhatsApp Web o deja elegir (según Sincronización → WhatsApp).
+// Abre WhatsApp de escritorio, WhatsApp Web o deja elegir (según Configuración → WhatsApp).
 function abrirWhatsApp(cel, texto) {
   const n = numeroWa(cel); const t = encodeURIComponent(texto || '');
   if (n.length < 11) return toast('El cliente no tiene un celular válido.');
@@ -385,10 +385,11 @@ async function guardarFotoPago(x, file) {
 // ------------------------------------------------------------------ Club: sellos, niveles y regalos
 let CACHE = null; let INV = null;
 const invalidar = () => { CACHE = null; INV = null; };
-const tienePack = p => (p.items || []).some(i => i.tipo === 'pack');
+// Cualquier compra cuenta: pack, frascos sueltos o productos por línea (el regalo solo no es compra).
+const tieneCompra = p => (p.items || []).some(i => i.tipo === 'pack' || i.tipo === 'suelto' || i.tipo === 'linea');
 const fechaSello = p => p.entregado_en || p.fecha;
-// Un pedido suma sello cuando es B2C, tiene pack, está pagado y entregado. El canje (publicidad) no suma.
-const daSello = p => p.canal !== 'b2b' && !p.anulado && !p.canje && tienePack(p) && estadoPago(p) === 'pagado' && p.estado_entrega === 'entregado';
+// Un pedido suma sello cuando es B2C, tiene alguna compra, está pagado y entregado. El canje (publicidad) no suma.
+const daSello = p => p.canal !== 'b2b' && !p.anulado && !p.canje && tieneCompra(p) && estadoPago(p) === 'pagado' && p.estado_entrega === 'entregado';
 
 function frascosDe(p) {
   const out = { vendidos: {}, regalo: {} };
@@ -492,7 +493,7 @@ function historialSellos(cid) {
   e.pedidos.filter(p => (p.items || []).some(i => i.tipo === 'regalo')).forEach(p => filas.push({ fecha: p.fecha, hito: 'usado', texto: `Usó su regalo en el pedido ${p.numero}`, pedido: p.id }));
   filas.forEach((f, i) => { f.orden = i; });
   filas.sort((a, b) => b.fecha.localeCompare(a.fecha) || b.orden - a.orden); // lo más reciente arriba; el hito, sobre el movimiento que lo causó
-  const porLlegar = e.pedidos.filter(p => p.canal !== 'b2b' && tienePack(p) && !daSello(p));
+  const porLlegar = e.pedidos.filter(p => p.canal !== 'b2b' && tieneCompra(p) && !daSello(p));
   return { filas, porLlegar };
 }
 function siguienteMeta(e) {
@@ -506,20 +507,17 @@ function siguienteMeta(e) {
   return m.join(' · ');
 }
 
-// Historias y reseñas: el encargado las registra a mano y suman 1 sello.
+// Historias y reseñas: el encargado las registra a mano y cada una suma 1 sello,
+// hasta CLUB.historias_pedido por pedido (0 = sin límite).
+const historiasDePedido = pid => lista('sellos_extra').filter(s => s.tipo === 'resena' && s.pedido_id === pid).length;
 function puedeResena(cid, pedidoId) {
-  const mes = hoy().slice(0, 7);
-  const delMes = lista('sellos_extra').filter(s => s.cliente_id === cid && s.tipo === 'resena' && String(s.fecha).startsWith(mes)).length;
-  if (CLUB.resenas_mes > 0 && delMes >= CLUB.resenas_mes) return `Ya sumó ${plural(delMes, 'historia/reseña', 'historias/reseñas')} este mes (máximo ${CLUB.resenas_mes}).`;
-  if (pedidoId && lista('sellos_extra').some(s => s.tipo === 'resena' && s.pedido_id === pedidoId)) return 'Ese pedido ya tiene su historia/reseña (1 por pedido).';
+  const max = CLUB.historias_pedido;
+  if (pedidoId && max > 0 && historiasDePedido(pedidoId) >= max) return `Ese pedido ya sumó ${plural(max, 'historia/reseña', 'historias/reseñas')} (máximo ${max} por pedido).`;
   return null;
 }
-const pedidosParaResena = cid => {
-  const usados = new Set(lista('sellos_extra').filter(s => s.tipo === 'resena').map(s => s.pedido_id));
-  return lista('pedidos').filter(p => p.cliente_id === cid && !p.anulado && p.estado_entrega === 'entregado' && !usados.has(p.id)).sort((a, b) => b.fecha.localeCompare(a.fecha));
-};
+const pedidosParaResena = cid => lista('pedidos').filter(p => p.cliente_id === cid && !p.anulado && p.estado_entrega === 'entregado' && !(CLUB.historias_pedido > 0 && historiasDePedido(p.id) >= CLUB.historias_pedido)).sort((a, b) => b.fecha.localeCompare(a.fecha));
 // El pedido es opcional: una clienta antigua puede no tener su compra registrada.
-const opcionesPedResena = ps => `${ps.map(p => `<option value="${p.id}">${h(p.numero)} · ${fechaCorta(p.fecha)}</option>`).join('')}<option value="">Sin pedido (venta antigua o no registrada)</option>`;
+const opcionesPedResena = ps => `${ps.map(p => { const n = historiasDePedido(p.id); return `<option value="${p.id}">${h(p.numero)} · ${fechaCorta(p.fecha)}${n ? ` · ${n}/${CLUB.historias_pedido || '∞'} historias` : ''}</option>`; }).join('')}<option value="">Sin pedido (venta antigua o no registrada)</option>`;
 async function registrarResena(cid, { red, link, pedido_id, nota }) {
   const err = puedeResena(cid, pedido_id); if (err) return err;
   const antes = { ...statsDe(cid) };
@@ -586,7 +584,7 @@ const cabPagina = (t, extra = '') => `<div class="modal-cab"><button class="btn 
 
 // ------------------------------------------------------------------ navegación
 // Al entrar a Pedidos se ve todo lo del mes (B2C y B2B, cualquier estado), sin filtros.
-const PED_BASE = () => ({ filtro: 'todos', canal: 'todos', q: '', mes: hoy().slice(0, 7) });
+const PED_BASE = () => ({ filtro: 'todos', canal: 'todos', q: '', mes: hoy().slice(0, 7), desde: '', hasta: '' });
 const UI = {
   vista: 'inicio',
   ped: PED_BASE(),
@@ -597,7 +595,7 @@ const UI = {
 };
 const ORDEN_VISTAS = ['inicio', 'pedidos', 'clientes', 'historial', 'analisis', 'club', 'productos', 'inventario', 'ajustes'];
 const VISTAS = { inicio: () => renderInicio(), pedidos: () => renderPedidos(), clientes: () => renderClientes(), historial: () => renderHistorial(), analisis: () => renderAnalisis(), club: () => renderClub(), productos: () => renderProductos(), inventario: () => renderInventario(), ajustes: () => renderAjustes() };
-// La pestaña (y la subpágina de Club / Sincronización) se recuerda: al recargar vuelves al mismo lugar.
+// La pestaña (y la subpágina de Club / Configuración) se recuerda: al recargar vuelves al mismo lugar.
 function recordarVista() {
   const h_ = '#' + UI.vista + (UI.vista === 'club' && UI.club !== 'resumen' ? '/' + UI.club : UI.vista === 'ajustes' && UI.ajustes !== 'conexion' ? '/' + UI.ajustes : '');
   if (location.hash !== h_) history.replaceState(null, '', h_);
@@ -866,17 +864,24 @@ function renderInicio() {
       <div class="acciones">
         <button class="btn prim" onclick="PF.abrir()">${ic('mas-circ')} Nuevo pedido</button>
         <button class="btn" onclick="INVF.abrir('entrada')">${ic('inventario')} Entrada de stock</button>
-        <button class="btn" onclick="ir('club')">${ic('camara')} Registrar historia</button>
+        <button class="btn" onclick="UI.club='actividad';ir('club')">${ic('camara')} Registrar historia</button>
       </div>
     </div>
-    ${(() => { const nuevas = NOTI.noLeidas().slice(0, 4); return nuevas.length ? `<div class="card" style="margin-bottom:16px"><h3>${ic('campana')} Notificaciones <small class="suave">(${NOTI.noLeidas().length} nuevas)</small></h3><div class="notif-grid">${nuevas.map(n => itemNotif(n, false)).join('')}</div></div>` : ''; })()}
+    <div class="inicio-top">
     <div class="kpis">
       ${kpi('dinero', 'Ventas de hoy', soles(suma(vHoy)), plural(vHoy.length, 'pedido'), "UI.ped.filtro='todos';ir('pedidos')")}
-      ${kpi('analisis', 'Ventas del mes', soles(suma(vMes)), cambio == null ? plural(vMes.length, 'pedido') : `<b style="color:${cambio >= 0 ? 'var(--ok)' : 'var(--error)'}">${cambio >= 0 ? '▲' : '▼'} ${Math.abs(cambio)}%</b> vs. mismo día del mes pasado`, "ir('analisis')")}
+      ${kpi('analisis', `Ventas de ${MESES_L[d.getMonth()]}`, soles(suma(vMes)), `Del 1 al ${d.getDate()} · ${plural(vMes.length, 'pedido')}${cambio == null ? '' : `<br><b style="color:${cambio >= 0 ? 'var(--ok)' : 'var(--error)'}">${cambio >= 0 ? '▲' : '▼'} ${Math.abs(cambio)}%</b> vs. 1 al ${d.getDate()} de ${MESES_L[(d.getMonth() + 11) % 12]}`}`, "ir('analisis')")}
       ${kpi('dinero', 'Por cobrar', soles(porCobrar.reduce((a, p) => a + saldoDe(p), 0)), `${plural(porCobrar.length, 'pedido')}${vencidos.length ? ` · <b style="color:var(--error)">${vencidos.length} vencido${vencidos.length === 1 ? '' : 's'}</b>` : ''}`, "UI.ped.filtro='cobrar';UI.ped.canal='todos';ir('pedidos')")}
-      ${kpi('camion', 'Por entregar', porEntregar.length, `${porEntregar.filter(p => p.estado_entrega === 'preparado').length} listos · ${porEntregar.filter(p => p.estado_entrega === 'en_camino').length} en camino`, "UI.ped.filtro='entregar';UI.ped.canal='todos';ir('pedidos')")}
-      ${kpi('clientes', 'Clientes activos', clientesActivos, 'compraron en los últimos 60 días', "ir('clientes')")}
-      ${kpi('inventario', 'Frascos en stock', lista('productos').reduce((a, p) => a + Math.max(0, stockDe(p.id)), 0), bajos.length ? `<b style="color:var(--error)">${bajos.length} bajo el mínimo</b>` : 'todo sobre el mínimo', "ir('inventario')")}
+      ${kpi('camion', 'Por entregar', porEntregar.length, `Listos: ${porEntregar.filter(p => p.estado_entrega === 'preparado').length} · En camino: ${porEntregar.filter(p => p.estado_entrega === 'en_camino').length}`, "UI.ped.filtro='entregar';UI.ped.canal='todos';ir('pedidos')")}
+      ${kpi('clientes', 'Clientes activos', clientesActivos, 'Compraron en los últimos 60 días', "ir('clientes')")}
+      ${kpi('inventario', 'Frascos en stock', lista('productos').reduce((a, p) => a + Math.max(0, stockDe(p.id)), 0), bajos.length ? `<b style="color:var(--error)">${bajos.length} bajo el mínimo</b>` : 'Todo sobre el mínimo', "ir('inventario')")}
+    </div>
+    ${(() => { const nuevas = NOTI.noLeidas();
+      return `<aside class="card notif-lado" aria-label="Notificaciones"><div class="notif-lado-in">
+        <div class="notif-lado-cab"><h3>${ic('campana')} Notificaciones${nuevas.length ? ` <span class="notif-cuenta">${nuevas.length}</span>` : ''}</h3>
+          <button class="btn mini" onclick="event.stopPropagation();$('#btn-notif').click()">Ver todas</button></div>
+        <div class="notif-lado-lista">${nuevas.length ? nuevas.slice(0, 8).map(n => itemNotif(n, false)).join('') : `<p class="suave notif-vacia">${ic('estrella')} Todo al día. No tienes notificaciones nuevas.</p>`}</div>
+      </div></aside>`; })()}
     </div>
     ${tarjetaResultado(activos)}
     <div class="grid g2">
@@ -897,7 +902,7 @@ function renderInicio() {
     <div class="grid g3" style="margin-top:16px">
       <div class="card"><h3>Ventas de los últimos 14 días</h3><div class="columnas">${porDia.map(([f, v]) => `<div class="col" title="${fechaCorta(f)}: ${soles(v)}"><span style="height:${(v / maxDia) * 140}px;${f === hoyS ? 'background:var(--negro)' : ''}"></span>${+f.slice(8)}</div>`).join('')}</div></div>
       <div class="card"><h3>Sabores vendidos este mes</h3>${barras(SABORES.map(s => [s.nombre, sab[s.id] || 0, COLOR_SABOR[s.id]]).sort((a, b) => b[1] - a[1]), v => `${v} fr.`)}</div>
-      <div class="card"><h3>Ventas del mes por canal</h3>${barras(Object.entries(canal), v => soles(v))}</div>
+      <div class="card"><h3>Ventas de ${MESES_L[d.getMonth()]} por canal</h3>${barras(Object.entries(canal), v => soles(v))}</div>
     </div>`;
 }
 
@@ -1033,9 +1038,9 @@ function resumenItems(p) {
 }
 function tagPago(p) {
   if (p.anulado) return '<span class="tag anulado">Cancelado</span>';
-  if (p.canje) return `<span class="tag canje">Canje</span><br><small class="${p.canje_cumplido ? '' : 'falta'}">${p.canje_cumplido ? 'ya publicó' : 'falta publicar'}</small>`;
+  if (p.canje) return `<span class="tag canje">Canje</span><br><small class="${p.canje_cumplido ? '' : 'falta'}">${p.canje_cumplido ? 'Ya publicó' : 'Falta publicar'}</small>`;
   const ep = estadoPago(p); const sal = saldoDe(p);
-  const sub = p.modalidad_pago === 'contra_entrega' ? 'contra entrega' : p.modalidad_pago === 'credito' ? `vence ${fechaCorta(p.fecha_vencimiento)}` : '';
+  const sub = p.modalidad_pago === 'contra_entrega' ? 'Contra entrega' : p.modalidad_pago === 'credito' ? `Vence el ${fechaCorta(p.fecha_vencimiento)}` : '';
   if (ep === 'pagado') return `<span class="tag entregado">Pagado</span>${metodosDe(p) ? `<br><small>${h(metodosDe(p))}</small>` : ''}`;
   return `<span class="tag ${vencido(p) ? 'anulado' : ep === 'parcial' ? 'parcial' : 'pendiente'}">${vencido(p) ? 'Vencido' : ep === 'parcial' ? 'Parcial' : 'Pendiente'} · ${soles(sal)}</span>${sub ? `<br><small>${sub}</small>` : ''}`;
 }
@@ -1045,7 +1050,7 @@ function celdaPago(p) {
       <option value="no" ${p.canje_cumplido ? '' : 'selected'}>Canje · falta publicar</option><option value="si" ${p.canje_cumplido ? 'selected' : ''}>Canje · ya publicó</option></select>`;
   if (p.anulado || p.canje || !(+p.total > 0)) return tagPago(p);
   const ep = estadoPago(p); const sal = saldoDe(p);
-  const sub = p.modalidad_pago === 'contra_entrega' ? 'contra entrega' : p.modalidad_pago === 'credito' ? `vence ${fechaCorta(p.fecha_vencimiento)}` : '';
+  const sub = p.modalidad_pago === 'contra_entrega' ? 'Contra entrega' : p.modalidad_pago === 'credito' ? `Vence el ${fechaCorta(p.fecha_vencimiento)}` : '';
   const clase = ep === 'pagado' ? 'pagado' : vencido(p) ? 'vencido' : ep;
   const actual = ep === 'pagado' ? `Pagado${metodosDe(p) ? ' · ' + metodosDe(p) : ''}` : `${vencido(p) ? 'Vencido' : ep === 'parcial' ? 'Parcial' : 'Pendiente'} · ${soles(sal)}`;
   const opts = ep === 'pagado' ? [['pendiente', 'Volver a pendiente']]
@@ -1055,9 +1060,9 @@ function celdaPago(p) {
 }
 function tagDoc(p) {
   if (p.anulado) return '';
-  if (p.canje && !p.comprobante?.numero) return '<small class="suave">canje</small>';
-  const c = p.comprobante?.numero ? `<span class="codigo" style="font-size:12px">${h(p.comprobante.numero)}</span>` : `<small class="falta">sin ${p.canal === 'b2b' ? 'comprobante' : 'boleta'}</small>`;
-  const g = p.canal === 'b2b' ? (p.guia?.numero ? `<br><small>GR ${h(p.guia.numero)}</small>` : '<br><small class="falta">sin guía</small>') : '';
+  if (p.canje && !p.comprobante?.numero) return '<small class="suave">No aplica (canje)</small>';
+  const c = p.comprobante?.numero ? `<span class="codigo" style="font-size:12px">${h(p.comprobante.numero)}</span>` : `<small class="falta">${p.canal === 'b2b' ? 'Sin factura' : 'Sin boleta'}</small>`;
+  const g = p.canal === 'b2b' ? (p.guia?.numero ? `<br><small>GR ${h(p.guia.numero)}</small>` : '<br><small class="falta">Sin guía</small>') : '';
   return c + g;
 }
 
@@ -1065,10 +1070,10 @@ const FILTROS_PED = {
   atender: ['Por atender', p => !p.anulado && (p.estado_entrega !== 'entregado' || saldoDe(p) > 0)],
   cobrar: ['Pendientes de pago', p => !p.anulado && saldoDe(p) > 0],
   entregar: ['Por entregar', p => !p.anulado && p.estado_entrega !== 'entregado'],
-  documento: ['Sin boleta / factura', p => !p.anulado && !p.canje && !p.comprobante?.numero],
+  documento: ['Sin boleta o factura', p => !p.anulado && !p.canje && !p.comprobante?.numero],
   canjes: ['Canjes (publicidad)', p => !p.anulado && p.canje],
   canje_pend: ['Canjes que falta publicar', p => !p.anulado && p.canje && !p.canje_cumplido],
-  recompra: ['Toca escribirle (siguiente pedido)', p => !p.anulado && ultimoPedidoDe(p.cliente_id)?.id === p.id && tocaEscribir(proximoPedido(p.cliente_id))],
+  recompra: ['Toca escribir para el siguiente pedido', p => !p.anulado && ultimoPedidoDe(p.cliente_id)?.id === p.id && tocaEscribir(proximoPedido(p.cliente_id))],
   cerrados: ['Entregados y pagados', p => !p.anulado && p.estado_entrega === 'entregado' && saldoDe(p) === 0],
   anulados: ['Cancelados', p => p.anulado],
   todos: ['Todos', () => true],
@@ -1082,10 +1087,10 @@ const chipCodigo = cod => cod ? `<button type="button" class="chip-cod" title="C
 // Columna Fechas: cuándo se pidió, cuándo se entregó (o se entrega) y, en el último pedido del cliente, cuándo toca el siguiente.
 function celdaFechas(p) {
   const hoyS = hoy();
-  const entrega = p.anulado ? '<span class="suave">cancelado</span>'
+  const entrega = p.anulado ? '<span class="suave">Cancelado</span>'
     : p.estado_entrega === 'entregado' ? `<span class="ok-txt">✓ ${fechaCorta(p.entregado_en || p.fecha_entrega || p.fecha)}</span>`
-    : p.fecha_entrega ? `<span class="${p.fecha_entrega < hoyS ? 'falta' : ''}" title="Fecha programada">${p.fecha_entrega === hoyS ? 'hoy' : fechaCorta(p.fecha_entrega)}${p.fecha_entrega < hoyS ? ' (atrasada)' : ''}</span>`
-    : '<span class="suave">sin fecha</span>';
+    : p.fecha_entrega ? `<span class="${p.fecha_entrega < hoyS ? 'falta' : ''}" title="Fecha programada">${p.fecha_entrega === hoyS ? 'Hoy' : fechaCorta(p.fecha_entrega)}${p.fecha_entrega < hoyS ? ' · Atrasada' : ''}</span>`
+    : '<span class="suave">Sin fecha</span>';
   let prox = '';
   if (!p.anulado && ultimoPedidoDe(p.cliente_id)?.id === p.id) {
     const px = proximoPedido(p.cliente_id);
@@ -1112,7 +1117,8 @@ function renderPedidos() {
   const canjesMes = delCanal.filter(p => !p.anulado && p.canje && p.fecha?.startsWith(mesActual));
   const meses = [...new Set([mesActual, ...todos.map(p => String(p.fecha || '').slice(0, 7)).filter(Boolean)])].sort().reverse();
   let ps = delCanal.filter(FILTROS_PED[f.filtro][1]);
-  if (f.mes) ps = ps.filter(p => p.fecha?.startsWith(f.mes));
+  if (f.mes === 'rango') ps = ps.filter(p => { const d = String(p.fecha || '').slice(0, 10); return (!f.desde || d >= f.desde) && (!f.hasta || d <= f.hasta); });
+  else if (f.mes) ps = ps.filter(p => p.fecha?.startsWith(f.mes));
   if (f.q) {
     const q = norm(f.q);
     const cel = limpiarCel(f.q);
@@ -1121,32 +1127,35 @@ function renderPedidos() {
   }
   const hayFiltro = f.canal !== 'todos' || f.filtro !== 'todos' || f.mes !== mesActual || f.q;
   const totalLista = ps.filter(p => !p.anulado).reduce((a, p) => a + (+p.total || 0), 0);
+  const rLista = ps.filter(esVenta).map(rentabilidad); const ganLista = rLista.reduce((a, r) => a + r.ganancia, 0); const ingLista = rLista.reduce((a, r) => a + r.ingreso, 0);
   const C = club();
   const kpi = (filtro, icono, titulo, valor, sub, extra = '') => `<button type="button" class="kpi clic ${f.filtro === filtro ? 'sel' : ''}" onclick="UI.ped.filtro='${filtro}';renderPedidos()"><small>${ic(icono)} ${titulo}</small><b class="num">${valor}</b><em>${sub}</em>${extra}</button>`;
   $('#v-pedidos').innerHTML = `
     <div class="cab-vista">
-      <div><h2>Pedidos</h2><span class="suave">Consumidores (B2C) y empresas (B2B). El pago y la entrega se siguen por separado.</span></div>
+      <div><h2>Pedidos</h2><span class="suave">Personas (B2C) y empresas (B2B). El pago y la entrega se siguen por separado.</span></div>
       <div class="der"><button class="btn prim" onclick="PF.abrir()">${ic('mas-circ')} Nuevo pedido</button></div>
     </div>
     <div class="kpis">
       <div class="kpi"><small>${ic('dinero')} Ventas de ${MESES_L[new Date().getMonth()]}</small><b class="num">${soles(ventaMes)}</b>
-        <em>${plural(delMes.length, 'pedido')}${ingMes ? ` · ganancia <b class="${claseMargen(ganMes / ingMes * 100)}-txt">${soles(ganMes)}</b> (${pct(ganMes / ingMes * 100)})` : ''}</em></div>
+        <em>${plural(delMes.length, 'pedido')}${ingMes ? ` · Ganancia <b class="${claseMargen(ganMes / ingMes * 100)}-txt">${soles(ganMes)}</b> (${pct(ganMes / ingMes * 100)})` : ''}</em></div>
       ${kpi('cobrar', 'alerta', 'Por cobrar', soles(porCobrar.reduce((a, p) => a + saldoDe(p), 0)), `${plural(porCobrar.length, 'pedido')}${vencidos.length ? ` · <b style="color:var(--error)">${vencidos.length} vencido${vencidos.length === 1 ? '' : 's'}</b>` : ''}`)}
-      ${kpi('entregar', 'camion', 'Por entregar', porEntregar.length, `${porEntregar.filter(p => p.estado_entrega === 'preparado').length} listos · ${porEntregar.filter(p => p.estado_entrega === 'en_camino').length} en camino`)}
-      ${canjesMes.length || f.filtro.startsWith('canje') ? kpi('canjes', 'regalo', `Canjes de ${MESES_L[new Date().getMonth()]}`, soles(-canjesMes.reduce((a, p) => a + rentabilidad(p).ganancia, 0)), `invertido en publicidad · ${plural(canjesMes.length, 'canje')}${canjesMes.some(p => !p.canje_cumplido) ? ` · <b style="color:var(--error)">${canjesMes.filter(p => !p.canje_cumplido).length} sin publicar</b>` : ''}`) : ''}
-      <div class="kpi"><small>${ic('calendario')} Pedidos de hoy</small><b class="num">${deHoy.length}</b><em>${fechaLarga(hoy())}${deHoy.length ? ` · ${soles(deHoy.filter(p => !p.anulado).reduce((a, p) => a + (+p.total || 0), 0))}` : ''}</em></div>
+      ${kpi('entregar', 'camion', 'Por entregar', porEntregar.length, `Listos: ${porEntregar.filter(p => p.estado_entrega === 'preparado').length} · En camino: ${porEntregar.filter(p => p.estado_entrega === 'en_camino').length}`)}
+      ${canjesMes.length || f.filtro.startsWith('canje') ? kpi('canjes', 'regalo', `Canjes de ${MESES_L[new Date().getMonth()]}`, soles(-canjesMes.reduce((a, p) => a + rentabilidad(p).ganancia, 0)), `Invertido en publicidad · ${plural(canjesMes.length, 'canje')}${canjesMes.some(p => !p.canje_cumplido) ? ` · <b style="color:var(--error)">${canjesMes.filter(p => !p.canje_cumplido).length} sin publicar</b>` : ''}`) : ''}
+      <div class="kpi"><small>${ic('calendario')} Pedidos de hoy</small><b class="num">${deHoy.length}</b><em>${(s => s[0].toUpperCase() + s.slice(1))(fechaLarga(hoy()))}${deHoy.length ? ` · ${soles(deHoy.filter(p => !p.anulado).reduce((a, p) => a + (+p.total || 0), 0))}` : ''}</em></div>
     </div>
     <div class="card">
       <div class="filtros">
         <div class="campo"><label>Tipo de pedido</label><select onchange="UI.ped.canal=this.value;renderPedidos()">
-          ${[['todos', 'B2C y B2B'], ['b2c', 'Consumidor (B2C)'], ['b2b', 'Empresa (B2B)']].map(([k, t]) => `<option value="${k}" ${f.canal === k ? 'selected' : ''}>${t} (${todos.filter(p => k === 'todos' || (p.canal || 'b2c') === k).length})</option>`).join('')}</select></div>
+          ${[['todos', 'Todos'], ['b2c', 'Personas (B2C)'], ['b2b', 'Empresas (B2B)']].map(([k, t]) => `<option value="${k}" ${f.canal === k ? 'selected' : ''}>${t} (${todos.filter(p => k === 'todos' || (p.canal || 'b2c') === k).length})</option>`).join('')}</select></div>
         <div class="campo"><label>Estado</label><select onchange="UI.ped.filtro=this.value;renderPedidos()">
           ${Object.entries(FILTROS_PED).map(([k, [t, fn]]) => `<option value="${k}" ${f.filtro === k ? 'selected' : ''}>${t} (${delCanal.filter(fn).length})</option>`).join('')}</select></div>
-        <div class="campo"><label>Mes</label><select onchange="UI.ped.mes=this.value;renderPedidos()">
-          <option value="">Todos los meses</option>${meses.map(m => `<option value="${m}" ${f.mes === m ? 'selected' : ''}>${nombreMes(m)}${m === mesActual ? ' (este mes)' : ''}</option>`).join('')}</select></div>
+        <div class="campo"><label>Periodo</label><select onchange="UI.ped.mes=this.value;if(this.value==='rango'&&!UI.ped.desde){UI.ped.desde=sumarDias(hoy(),-30);UI.ped.hasta=hoy();}renderPedidos()">
+          <option value="">Todos los meses</option>${meses.map(m => `<option value="${m}" ${f.mes === m ? 'selected' : ''}>${nombreMes(m)}${m === mesActual ? ' (este mes)' : ''}</option>`).join('')}<option value="rango" ${f.mes === 'rango' ? 'selected' : ''}>Elegir fechas…</option></select></div>
+        ${f.mes === 'rango' ? `<div class="campo"><label>Desde</label><input type="date" value="${h(f.desde || '')}" max="${h(f.hasta || '')}" onchange="UI.ped.desde=this.value;renderPedidos()"></div>
+        <div class="campo"><label>Hasta</label><input type="date" value="${h(f.hasta || '')}" min="${h(f.desde || '')}" onchange="UI.ped.hasta=this.value;renderPedidos()"></div>` : ''}
         <div class="campo buscar"><label>Buscar</label><input type="search" placeholder="Código, cliente, celular, RUC, boleta…" value="${h(f.q)}" oninput="UI.ped.q=this.value;renderPedidosLuego()" id="ped-q"></div>
       </div>
-      <div class="barra-lista"><span><b>${plural(ps.length, 'pedido')}</b>${ps.length ? ` · ${soles(totalLista)}` : ''}</span>
+      <div class="barra-lista"><span><b>${plural(ps.length, 'pedido')}</b>${ps.length ? ` · ${soles(totalLista)}` : ''}${ingLista ? ` · Ganancia <b class="${claseMargen(ganLista / ingLista * 100)}-txt">${soles(ganLista)}</b> (${pct(ganLista / ingLista * 100)})` : ''}</span>
         ${hayFiltro ? `<button class="btn mini" onclick="UI.ped=PED_BASE();renderPedidos()">Quitar filtros</button>` : ''}</div>
       <div class="tabla-wrap"><table class="tabla-ped">
         <thead><tr><th>Pedido</th><th>Fechas</th><th>Cliente</th><th class="der">Monto</th><th class="der">Ganancia</th><th>Pago</th><th>Estado</th><th>Comprobante</th><th></th></tr></thead>
@@ -1155,10 +1164,10 @@ function renderPedidos() {
           return `<tr class="clic ${p.anulado ? 'anulada' : ''}" onclick="PF.abrir('${p.id}')" title="Ver el detalle del pedido">
             <td><b class="num-ped">${h(p.numero)}</b> ${tagCanal(p.canal)}</td>
             <td>${celdaFechas(p)}</td>
-            <td><div class="cli-celda">${avatar(c, e?.nivel)}<div><b>${h(nombreCliente(c))}</b>${esPrueba('pedidos', p.id) ? ' <span class="tag prueba">prueba</span>' : ''}<br>
+            <td><div class="cli-celda">${avatar(c, e?.nivel)}<div><b>${h(nombreCliente(c))}</b>${esPrueba('pedidos', p.id) ? ' <span class="tag prueba">Prueba</span>' : ''}<br>
               ${p.canal === 'b2b' ? `<small>${h(c?.tipo_negocio || '')}</small>` : `${tagNivel(p.nivel_precio || 'oficial')} ${e?.regalosPend ? `<span class="tag regalo" title="Tiene regalo del Club">${ic('regalo')}</span>` : ''}`}</div></div></td>
             <td class="der num"><b>${soles(p.total)}</b></td>
-            <td class="der num">${p.anulado ? '<small class="suave">—</small>' : p.canje ? `<b class="m-medio-txt" title="Costo de las mantequillas${R.courier ? ' + courier' : ''}">−${soles(-R.ganancia)}</b><br><small class="suave">publicidad</small>` : `<b class="${claseMargen(R.margen)}-txt" title="Venta ${soles(R.ingreso)} − costo ${soles(R.costo)}${R.courier ? ` − courier ${soles(R.courier)}` : ''}">${soles(R.ganancia)}</b><br><small class="${claseMargen(R.margen)}-txt">${pct(R.margen)} margen</small>`}</td>
+            <td class="der num">${p.anulado ? '<small class="suave">—</small>' : p.canje ? `<b class="m-medio-txt" title="Costo de las mantequillas${R.courier ? ' + courier' : ''}">−${soles(-R.ganancia)}</b><br><small class="suave">Publicidad</small>` : `<b class="${claseMargen(R.margen)}-txt" title="Venta ${soles(R.ingreso)} − costo ${soles(R.costo)}${R.courier ? ` − courier ${soles(R.courier)}` : ''}">${soles(R.ganancia)}</b><br><small class="${claseMargen(R.margen)}-txt">Margen ${pct(R.margen)}</small>`}</td>
             <td>${celdaPago(p)}</td>
             <td>${selectEstado(estadoPed(p), `PED.estado('${p.id}',this.value,this)`)}
               ${!p.anulado && p.courier?.empresa ? `<br><small>${h(p.courier.empresa)}${p.courier.conductor ? ' · ' + h(p.courier.conductor) : ''}</small>` : ''}</td>
@@ -1168,8 +1177,8 @@ function renderPedidos() {
               <button class="btn mini peligro solo-ic" onclick="event.stopPropagation();PED.eliminar('${p.id}')" title="Eliminar pedido" aria-label="Eliminar pedido">${ic('basura')}</button>
             </td></tr>`;
         }).join('') : `<tr><td colspan="9" class="vacio"><div class="vacio-caja">${ic('pedidos', 'g')}<b>${todos.length ? 'No hay pedidos con este filtro' : 'Todavía no hay pedidos'}</b>
-          <span>${todos.length ? 'Prueba con otro estado o mes.' : 'Registra el primero y aquí verás su pago, entrega y margen.'}</span>
-          ${todos.length ? (hayFiltro ? `<button class="btn mini" onclick="UI.ped={filtro:'todos',canal:'todos',q:'',mes:''};renderPedidos()">Ver todos los pedidos</button>` : '') : `<button class="btn prim" onclick="PF.abrir()">${ic('mas-circ')} Nuevo pedido</button>`}</div></td></tr>`}</tbody>
+          <span>${todos.length ? 'Prueba con otro estado, mes o búsqueda.' : 'Registra el primero y aquí verás su pago, entrega y margen.'}</span>
+          ${todos.length ? (hayFiltro ? `<button class="btn mini" onclick="UI.ped={...PED_BASE(),mes:''};renderPedidos()">Ver todos los pedidos</button>` : '') : `<button class="btn prim" onclick="PF.abrir()">${ic('mas-circ')} Nuevo pedido</button>`}</div></td></tr>`}</tbody>
       </table></div>
     </div>`;
 }
@@ -1527,7 +1536,7 @@ const PF = {
       const c = PF.cliente(); const e = statsDe(c.id);
       el.innerHTML = `<div class="cliente-sel">
           <div style="flex:1"><b style="font-size:18px">${h(nombreCliente(c))}</b> ${b2b ? `<span class="tag b2b">${h(c.tipo_negocio || 'Empresa')}</span>` : `${tagNivel(e.nivel, e.manual ? ' · fijado' : '')} ${e.pausa ? '<span class="tag pausa">en pausa</span>' : ''}`}<br>
-          <span class="suave">${b2b ? `${c.razon_social ? h(c.razon_social) + ' · ' : ''}${c.ruc ? 'RUC ' + h(c.ruc) : '<span class="falta">sin RUC</span>'} · contacto ${h(c.contacto || '—')} · ${h(c.celular)}`
+          <span class="suave">${b2b ? `${c.razon_social ? h(c.razon_social) + ' · ' : ''}${c.ruc ? 'RUC ' + h(c.ruc) : '<span class="falta">Sin RUC</span>'} · contacto ${h(c.contacto || '—')} · ${h(c.celular)}`
             : `${h(c.celular)} · ${plural(e.total, 'sello')} · ${plural(e.ventas.length, 'compra')} · código <span class="codigo">${h(c.codigo)}</span>`}</span>
           ${(() => { const otros = r2(e.pedidos.filter(x => x.id !== F.id).reduce((a, x) => a + saldoDe(x), 0)); return otros > 0 ? `<br><span class="tag pendiente">Debe ${soles(otros)} de otros pedidos</span>` : ''; })()}
 </div>
@@ -1723,7 +1732,7 @@ const PF = {
         </div>
         <small class="suave">${F.envio_asumido ? 'El costo del courier sale de tu ganancia: lo ves en <b>Rentabilidad</b>.' : 'Si cobras menos de lo que pagas al courier, la diferencia sale de tu ganancia.'}</small>
       </div>`}
-      ${c.propio ? '' : `<p style="margin:14px 0 6px"><b>Courier</b> <small class="suave">opcional · la lista se edita en Sincronización</small></p>
+      ${c.propio ? '' : `<p style="margin:14px 0 6px"><b>Courier</b> <small class="suave">Opcional · la lista se edita en Configuración</small></p>
       <div class="grid g3">
         <div class="campo"><label>Empresa</label><select onchange="PF.cour('empresa',this.value)"><option value="">—</option>${lista_.map(x => `<option ${!c._otro && c.empresa === x ? 'selected' : ''}>${h(x)}</option>`).join('')}<option value="__otro" ${c._otro ? 'selected' : ''}>Otro…</option></select>
           ${c._otro ? `<input type="text" id="pf-cour-otro" style="margin-top:6px" placeholder="Nombre del courier" value="${h(c.empresa)}" oninput="PF.courOtro(this.value)">
@@ -1905,7 +1914,7 @@ const PF = {
     const fila = (a, b, cls = '') => `<div class="fila-r ${cls}"><span>${a}</span><b class="num">${b}</b></div>`;
     const ancho = Math.max(0, Math.min(100, R.margen));
     return `<div class="rentab">
-      <div class="rentab-cab"><b>${ic('dinero')} Rentabilidad</b>${F.canje ? '<span class="margen-pill m-medio">canje</span>' : `<span class="margen-pill ${claseMargen(R.margen)}">margen ${pct(R.margen)}</span>`}</div>
+      <div class="rentab-cab"><b>${ic('dinero')} Rentabilidad</b>${F.canje ? '<span class="margen-pill m-medio">Canje</span>' : `<span class="margen-pill ${claseMargen(R.margen)}">Margen ${pct(R.margen)}</span>`}</div>
       <div class="margen-riel"><span class="${claseMargen(R.margen)}" style="width:${ancho}%"></span><i style="left:${MARGEN_MINIMO}%" title="Mínimo ${MARGEN_MINIMO}%"></i></div>
       ${!b2b && !F.canje && descLista > 0 ? fila(`Precio de lista <small>(${plural(R.frascos - F.regalos.length, 'frasco')} sueltos)</small>`, soles(R.lista)) + fila('Ahorro por pack / nivel', '−' + soles(descLista), 'rojo') : ''}
       ${t.canje ? fila('Canje (no se cobra)', '−' + soles(t.canje), 'rojo') : t.descuento ? fila(t.ref && t.otro ? 'Descuentos (referido + otro)' : t.ref ? 'Descuento referido' : F._descTipo === 'pct' ? `Descuento ${+F._descValor}%` : 'Descuento', '−' + soles(t.descuento), 'rojo') : ''}
@@ -1964,7 +1973,7 @@ const PF = {
         <button class="btn mini" onclick="copiar(document.getElementById('pf-wa-txt').value)">Copiar</button>
         ${F._waEdit ? `<button class="btn mini" onclick="F._waEdit=false;F._waTxt=null;PF.pintarWA()">Restaurar</button>` : ''}
       </div>
-      <small class="suave">Se abre ${CFG.wa_modo === 'web' ? 'WhatsApp Web' : CFG.wa_modo === 'elegir' ? 'WhatsApp (tú eliges la app o la web)' : 'WhatsApp de escritorio'} con el mensaje listo. Cámbialo en Sincronización.</small>`;
+      <small class="suave">Se abre ${CFG.wa_modo === 'web' ? 'WhatsApp Web' : CFG.wa_modo === 'elegir' ? 'WhatsApp (tú eliges la app o la web)' : 'WhatsApp de escritorio'} con el mensaje listo. Cámbialo en Configuración.</small>`;
   },
   async enviarWA() {
     const editado = F._waEdit ? $('#pf-wa-txt').value : null; const clave = F._waClave;
@@ -2119,10 +2128,10 @@ function renderClientes() {
       <div class="der"><button class="btn" onclick="CLI.exportar()">${ic('descargar')} Exportar CSV</button><button class="btn prim" onclick="CLI.abrir(null, UI.cli.tipo)">${ic('mas-circ')} ${emp ? 'Nueva empresa' : 'Nuevo cliente'}</button></div>
     </div>
     <div class="kpis">
-      <div class="kpi"><small>${ic(emp ? 'productos' : 'clientes')} ${emp ? 'Empresas' : 'Clientes'}</small><b class="num">${delTipo.length}</b><em>${k.activos} compraron en los últimos ${CLUB.dias_pausa} días</em></div>
-      <div class="kpi"><small>${ic('dinero')} Ganancia que dejan</small><b class="num">${soles(k.ganancia)}</b><em>de ${soles(k.gasto)} en ventas${k.gasto ? ` · <span class="${claseMargen(mg)}-txt">${pct(mg)}</span>` : ''}</em></div>
+      <div class="kpi"><small>${ic(emp ? 'productos' : 'clientes')} ${emp ? 'Empresas' : 'Clientes'}</small><b class="num">${delTipo.length}</b><em>${k.activos} ${k.activos === 1 ? 'compró' : 'compraron'} en los últimos ${CLUB.dias_pausa} días</em></div>
+      <div class="kpi"><small>${ic('dinero')} Ganancia que dejan</small><b class="num">${soles(k.ganancia)}</b><em>De ${soles(k.gasto)} en ventas${k.gasto ? ` · <span class="${claseMargen(mg)}-txt">${pct(mg)}</span>` : ''}</em></div>
       <button type="button" class="kpi clic ${f.nivel === 'deuda' ? 'sel' : ''}" onclick="UI.cli.nivel=UI.cli.nivel==='deuda'?'todos':'deuda';renderClientes()"><small>${ic('alerta')} Con saldo pendiente</small><b class="num">${soles(k.deuda)}</b><em>${plural(k.deudaN, emp ? 'empresa' : 'cliente')}</em></button>
-      ${emp ? '' : `<div class="kpi"><small>${ic('regalo')} Regalos por entregar</small><b class="num">${k.regalo}</b><em>${k.regalo ? 'agéndalos desde la campana' : 'nadie tiene regalo pendiente'}</em></div>`}
+      ${emp ? '' : `<div class="kpi"><small>${ic('regalo')} Regalos por entregar</small><b class="num">${k.regalo}</b><em>${k.regalo ? 'Agéndalos desde la campana' : 'Nadie tiene regalo pendiente'}</em></div>`}
     </div>
     <div class="card">
       <div class="filtros">
@@ -2131,7 +2140,7 @@ function renderClientes() {
         <div class="campo"><label>${emp ? 'Estado' : 'Nivel'}</label><select onchange="UI.cli.nivel=this.value;renderClientes()">
           ${nivOpc.map(([x, t]) => `<option value="${x}" ${f.nivel === x ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
         <div class="campo"><label>Ordenar por</label><select onchange="UI.cli.orden=this.value;renderClientes()">
-          ${[['reciente', 'Compra más reciente'], ['sellos', 'Más sellos'], ['gasto', 'Más gasto'], ['ganancia', 'Más ganancia'], ['nombre', 'Nombre A-Z']].filter(([x]) => !(emp && x === 'sellos')).map(([x, t]) => `<option value="${x}" ${f.orden === x ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
+          ${[['reciente', 'Compra más reciente'], ['sellos', 'Más sellos'], ['gasto', 'Más gasto'], ['ganancia', 'Más ganancia'], ['nombre', 'Nombre (A-Z)']].filter(([x]) => !(emp && x === 'sellos')).map(([x, t]) => `<option value="${x}" ${f.orden === x ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
         <div class="campo buscar"><label>Buscar</label><input type="search" id="cli-q" placeholder="Nombre, celular, ${emp ? 'RUC' : 'código PEANUT-…'} o distrito" value="${h(f.q)}" oninput="UI.cli.q=this.value;renderClientesLuego()"></div>
       </div>
       <div class="barra-lista"><span><b>${plural(cs.length, emp ? 'empresa' : 'cliente')}</b></span>
@@ -2141,17 +2150,17 @@ function renderClientes() {
         <tbody>${cs.length ? cs.map(c => { const e = C[c.id]; const em = esEmpresa(c);
           const enCiclo = e.total % CLUB.regalo_cada;
           return `<tr class="clic" onclick="CLI.abrir('${c.id}')">
-          <td><div class="cli-celda">${avatar(c, e.nivel)}<div><b>${h(nombreCliente(c))}</b>${c._demo ? ' <small>(ejemplo)</small>' : ''}${esPrueba('clientes', c.id) ? ' <span class="tag prueba">prueba</span>' : ''}<br>
-            ${em ? `<small>${c.ruc ? 'RUC ' + h(c.ruc) : '<span class="falta">sin RUC</span>'}${c.contacto ? ' · ' + h(c.contacto) : ''}</small>` : chipCodigo(c.codigo)}</div></div></td>
+          <td><div class="cli-celda">${avatar(c, e.nivel)}<div><b>${h(nombreCliente(c))}</b>${c._demo ? ' <small>(Ejemplo)</small>' : ''}${esPrueba('clientes', c.id) ? ' <span class="tag prueba">Prueba</span>' : ''}<br>
+            ${em ? `<small>${c.ruc ? 'RUC ' + h(c.ruc) : '<span class="falta">Sin RUC</span>'}${c.contacto ? ' · ' + h(c.contacto) : ''}</small>` : chipCodigo(c.codigo)}</div></div></td>
           <td><span class="num">${h(c.celular)}</span><br><small>${h(c.distrito || '—')}</small></td>
-          <td>${em ? `<span class="tag b2b">${h(c.tipo_negocio || 'Empresa')}</span>` : `${tagNivel(e.nivel, e.manual ? ' · fijado' : '')} ${e.pausa ? '<span class="tag pausa">pausa</span>' : ''}
+          <td>${em ? `<span class="tag b2b">${h(c.tipo_negocio || 'Empresa')}</span>` : `${tagNivel(e.nivel, e.manual ? ' · Fijado' : '')} ${e.pausa ? '<span class="tag pausa">En pausa</span>' : ''}
             <div class="mini-sellos" title="${plural(e.total, 'sello')} · ${CLUB.regalo_cada - enCiclo} para el próximo regalo"><span style="width:${(e.total > 0 && enCiclo === 0 ? 1 : enCiclo / CLUB.regalo_cada) * 100}%"></span></div>
-            <small>${plural(e.total, 'sello')}${e.regalosPend ? ` · <b style="color:var(--caramelo)">${ic('regalo')} regalo</b>` : ''}</small>`}</td>
+            <small>${plural(e.total, 'sello')}${e.regalosPend ? ` · <b style="color:var(--caramelo)">${ic('regalo')} Regalo</b>` : ''}</small>`}</td>
           <td class="cen num"><b>${e.ventas.length}</b></td>
-          <td class="der num">${soles(e.gasto)}${e.gasto ? `<br><small class="${claseMargen(e.margen)}-txt">gana ${soles(e.ganancia)}</small>` : ''}</td>
+          <td class="der num">${soles(e.gasto)}${e.gasto ? `<br><small class="${claseMargen(e.margen)}-txt">Ganancia ${soles(e.ganancia)}</small>` : ''}</td>
           <td class="der num">${e.saldo > 0 ? `<b style="color:var(--error)">${soles(e.saldo)}</b>` : '<small class="suave">—</small>'}</td>
-          <td>${e.ultima ? `${fechaCorta(e.ultima.toISOString())}<br><small>hace ${plural(e.dias, 'día')}</small>` : '<small>sin compras</small>'}</td>
-          <td class="der acciones-fila"><button class="btn mini wa solo-ic" title="Abrir WhatsApp" aria-label="WhatsApp" onclick="event.stopPropagation();abrirWhatsApp('${h(c.celular)}','')">${ic('wa')}</button>
+          <td>${e.ultima ? `${fechaCorta(e.ultima.toISOString())}<br><small>${e.dias === 0 ? 'Hoy' : `Hace ${plural(e.dias, 'día')}`}</small>` : '<small class="suave">Sin compras</small>'}</td>
+          <td class="der acciones-fila"><button class="btn mini wa solo-ic" title="Escribir por WhatsApp" aria-label="Escribir por WhatsApp" onclick="event.stopPropagation();abrirWhatsApp('${h(c.celular)}','')">${ic('wa')}</button>
             <button class="btn mini" title="Nuevo pedido para este cliente" onclick="event.stopPropagation();PF.abrir(null,'${c.id}')">${ic('mas-circ')} Pedido</button>
             <button class="btn mini peligro solo-ic" title="Eliminar cliente" aria-label="Eliminar cliente" onclick="event.stopPropagation();CLI.borrar('${c.id}')">${ic('basura')}</button></td></tr>`; }).join('')
           : `<tr><td colspan="8" class="vacio"><div class="vacio-caja">${ic('clientes', 'g')}<b>${delTipo.length ? 'No hay clientes con este filtro' : emp ? 'Todavía no hay empresas' : 'Todavía no hay clientes'}</b>
@@ -2164,13 +2173,13 @@ function renderClientesLuego() { clearTimeout(_tCli); _tCli = setTimeout(() => {
 
 // Tarjeta del Club: cada 10 sellos se completa una tarjeta (= 1 regalo) y empieza otra.
 // Muestra el total acumulado, las tarjetas completas y los sellos que están por llegar
-// (pedidos con pack que aún no están pagados y entregados).
+// (pedidos que aún no están pagados y entregados).
 function tarjetaSellos(e) {
   const N = CLUB.regalo_cada;
   const enCiclo = e.total % N;
   const llenos = e.total > 0 && enCiclo === 0 ? N : enCiclo;
   const completas = Math.floor(e.total / N) - (e.total > 0 && enCiclo === 0 ? 1 : 0);
-  const porLlegar = e.pedidos.filter(p => p.canal !== 'b2b' && tienePack(p) && !daSello(p));
+  const porLlegar = e.pedidos.filter(p => p.canal !== 'b2b' && tieneCompra(p) && !daSello(p));
   const motivo = p => { const falta = [estadoPago(p) !== 'pagado' ? 'pago' : null, p.estado_entrega !== 'entregado' ? 'entrega' : null].filter(Boolean); return `falta ${falta.join(' y ')}`; };
   const nPend = Math.min(porLlegar.length, N - llenos);
   return `<div class="tarjeta"><div class="tt"><b>Tarjeta Mr. Peanut${completas ? ` n.° ${completas + 1}` : ''}</b><span><b class="tt-total">${e.total}</b> ${e.total === 1 ? 'sello' : 'sellos'} acumulados</span></div>
@@ -2519,14 +2528,21 @@ const COLOR_SABOR = { mani: '#C55903', chocomani: '#5a3319', crunchy: '#02C6FB',
 
 function renderAnalisis() {
   const f = UI.ana; const C = club();
-  const desde = f.periodo === 'todo' ? null : new Date(Date.now() - (+f.periodo) * 86400000);
+  // Periodo: "Últimos N días" va de hoy menos N días hasta hoy (ej. 30 días = del 17 sep al 17 oct); "rango" usa desde/hasta.
+  const desde = f.periodo === 'todo' ? null : f.periodo === 'rango' ? (f.desde || null) : sumarDias(hoy(), -(+f.periodo));
+  const hasta = f.periodo === 'rango' ? (f.hasta || null) : null;
+  const enPeriodo = p => { const d = String(p.fecha || '').slice(0, 10); return (!desde || d >= desde) && (!hasta || d <= hasta); };
   const enCanal = p => f.canal === 'todos' || (p.canal || 'b2c') === f.canal;
-  const ventas = lista('pedidos').filter(p => esVenta(p) && enCanal(p) && (!desde || aFecha(p.fecha) >= desde));
+  const ventas = lista('pedidos').filter(p => esVenta(p) && enCanal(p) && enPeriodo(p));
   const total = ventas.reduce((a, p) => a + (+p.total || 0), 0);
+  const rent = ventas.map(rentabilidad);
+  const ganancia = rent.reduce((a, r) => a + r.ganancia, 0); const ingreso = rent.reduce((a, r) => a + r.ingreso, 0);
+  const margen = ingreso ? ganancia / ingreso * 100 : 0;
+  const ganCli = {}; ventas.forEach((p, i) => { ganCli[p.cliente_id] = (ganCli[p.cliente_id] || 0) + rent[i].ganancia; });
   const porCli = {}; ventas.forEach(p => { (porCli[p.cliente_id] ||= []).push(p); });
   const nCli = Object.keys(porCli).length;
   const recompra = Object.values(porCli).filter(v => v.length > 1).length;
-  const nuevos = Object.keys(porCli).filter(id => { const e = C[id]; return e && e.primera && (!desde || e.primera >= desde); }).length;
+  const nuevos = Object.keys(porCli).filter(id => { const e = C[id]; return e && e.primera && (!desde || isoLocal(e.primera) >= desde) && (!hasta || isoLocal(e.primera) <= hasta); }).length;
   const sab = {}; const reg = {}; let frascos = 0; const packs = {};
   ventas.forEach(p => {
     const fr = frascosDe(p);
@@ -2543,7 +2559,7 @@ function renderAnalisis() {
   const porMes = meses.map(m => [m, lista('pedidos').filter(p => esVenta(p) && enCanal(p) && p.fecha?.startsWith(m)).reduce((a, p) => a + (+p.total || 0), 0)]);
   const maxMes = Math.max(1, ...porMes.map(x => x[1]));
   const distritos = {}; ventas.forEach(p => { const d = D.clientes.get(p.cliente_id)?.distrito || 'Sin distrito'; distritos[d] = (distritos[d] || 0) + 1; });
-  const canales = { B2C: 0, B2B: 0 }; lista('pedidos').filter(p => esVenta(p) && (!desde || aFecha(p.fecha) >= desde)).forEach(p => { canales[p.canal === 'b2b' ? 'B2B' : 'B2C'] += +p.total || 0; });
+  const canales = { B2C: 0, B2B: 0 }; lista('pedidos').filter(p => esVenta(p) && enPeriodo(p)).forEach(p => { canales[p.canal === 'b2b' ? 'B2B' : 'B2C'] += +p.total || 0; });
   const top = Object.entries(porCli).map(([id, ps]) => [id, ps.reduce((a, p) => a + (+p.total || 0), 0), ps.length]).sort((a, b) => b[1] - a[1]).slice(0, 10);
   // Clientes que no están comprando. Dos variables (editables aquí mismo):
   //  · frecuencia esperada: si no tiene historial, se espera que vuelva a comprar en estos días;
@@ -2565,21 +2581,25 @@ function renderAnalisis() {
     <div class="cab-vista">
       <div><h2>Análisis de clientes</h2><span class="suave">Quién compra, qué compra y cuándo volverá a comprar. Cuenta los pedidos pagados o entregados.</span></div>
     </div>
-    <div class="filtros" style="max-width:560px">
-      <div class="campo"><label>Tipo de cliente</label><select onchange="UI.ana.canal=this.value;renderAnalisis()">${[['todos', 'B2C y B2B'], ['b2c', 'Consumidores (B2C)'], ['b2b', 'Empresas (B2B)']].map(([k, t]) => `<option value="${k}" ${f.canal === k ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
-      <div class="campo"><label>Periodo</label><select onchange="UI.ana.periodo=this.value;renderAnalisis()">${[['30', 'Últimos 30 días'], ['90', 'Últimos 90 días'], ['180', 'Últimos 6 meses'], ['365', 'Último año'], ['todo', 'Todo']].map(([k, t]) => `<option value="${k}" ${f.periodo === k ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
+    <div class="filtros" style="max-width:${f.periodo === 'rango' ? 900 : 560}px">
+      <div class="campo"><label>Tipo de cliente</label><select onchange="UI.ana.canal=this.value;renderAnalisis()">${[['todos', 'Todos'], ['b2c', 'Personas (B2C)'], ['b2b', 'Empresas (B2B)']].map(([k, t]) => `<option value="${k}" ${f.canal === k ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
+      <div class="campo"><label>Periodo</label><select onchange="UI.ana.periodo=this.value;if(this.value==='rango'&&!UI.ana.desde){UI.ana.desde=sumarDias(hoy(),-30);UI.ana.hasta=hoy();}renderAnalisis()">${[['7', 'Últimos 7 días'], ['30', 'Últimos 30 días'], ['90', 'Últimos 90 días'], ['180', 'Últimos 6 meses'], ['365', 'Último año'], ['todo', 'Todo'], ['rango', 'Elegir fechas…']].map(([k, t]) => `<option value="${k}" ${f.periodo === k ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
+      ${f.periodo === 'rango' ? `<div class="campo"><label>Desde</label><input type="date" value="${h(f.desde || '')}" max="${h(f.hasta || hoy())}" onchange="UI.ana.desde=this.value;renderAnalisis()"></div>
+      <div class="campo"><label>Hasta</label><input type="date" value="${h(f.hasta || '')}" min="${h(f.desde || '')}" onchange="UI.ana.hasta=this.value;renderAnalisis()"></div>` : ''}
     </div>
+    <p class="suave" style="margin:-6px 0 12px">${desde ? `Del ${fechaCorta(desde)} al ${fechaCorta(hasta || hoy())}` : 'Todo el historial'}.</p>
     <div class="kpis">
       <div class="kpi"><small>Ventas</small><b class="num">${soles(total)}</b><em>${plural(ventas.length, 'pedido')}</em></div>
-      <div class="kpi"><small>Ticket promedio</small><b class="num">${soles(ventas.length ? total / ventas.length : 0)}</b><em>por pedido</em></div>
-      <div class="kpi"><small>Clientes que compraron</small><b class="num">${nCli}</b><em>${nuevos} nuevos en el periodo</em></div>
-      <div class="kpi"><small>Recompra</small><b class="num">${nCli ? Math.round(recompra / nCli * 100) : 0}%</b><em>${recompra} compraron 2 veces o más</em></div>
+      <div class="kpi"><small>Ganancia</small><b class="num ${ingreso ? claseMargen(margen) + '-txt' : ''}">${soles(ganancia)}</b><em>${ingreso ? `Margen ${pct(margen)} · descontando costo, courier e IGV (solo B2B)` : 'Sin ventas en el periodo'}</em></div>
+      <div class="kpi"><small>Ticket promedio</small><b class="num">${soles(ventas.length ? total / ventas.length : 0)}</b><em>${ventas.length ? `Ganancia promedio ${soles(ganancia / ventas.length)}` : 'Por pedido'}</em></div>
+      <div class="kpi"><small>Clientes que compraron</small><b class="num">${nCli}</b><em>${plural(nuevos, 'nuevo')} en el periodo</em></div>
+      <div class="kpi"><small>Recompra</small><b class="num">${nCli ? Math.round(recompra / nCli * 100) : 0}%</b><em>${recompra} ${recompra === 1 ? 'compró' : 'compraron'} 2 veces o más</em></div>
       <div class="kpi"><small>Frascos vendidos</small><b class="num">${frascos}</b><em>+${Object.values(reg).reduce((a, b) => a + b, 0)} de regalo</em></div>
     </div>
     <div class="kpis">
-      <div class="kpi"><small>${ic('calendario')} Frecuencia de compra</small><b class="num">${frecProm ? `${frecProm} d` : '—'}</b><em>${frecProm ? `promedio entre compras (${plural(conFrec.length, 'cliente')} con 2+ compras)` : 'hace falta clientes con 2+ compras'}</em></div>
-      <button type="button" class="kpi clic ${f.riesgo === 'atrasado' ? 'sel' : ''}" onclick="UI.ana.riesgo=UI.ana.riesgo==='atrasado'?'todos':'atrasado';renderAnalisis()"><small>${ic('reloj')} Atrasados</small><b class="num" style="color:var(--alerta)">${nAtrasados}</b><em>pasaron su frecuencia de compra</em></button>
-      <button type="button" class="kpi clic ${f.riesgo === 'perdido' ? 'sel' : ''}" onclick="UI.ana.riesgo=UI.ana.riesgo==='perdido'?'todos':'perdido';renderAnalisis()"><small>${ic('alerta')} Ya no compran</small><b class="num" style="color:var(--error)">${nPerdidos}</b><em>más de ${V.ya_no_compra} días sin comprar</em></button>
+      <div class="kpi"><small>${ic('calendario')} Frecuencia de compra</small><b class="num">${frecProm ? `${frecProm} d` : '—'}</b><em>${frecProm ? `Promedio entre compras (${plural(conFrec.length, 'cliente')} con 2+ compras)` : 'Hace falta clientes con 2+ compras'}</em></div>
+      <button type="button" class="kpi clic ${f.riesgo === 'atrasado' ? 'sel' : ''}" onclick="UI.ana.riesgo=UI.ana.riesgo==='atrasado'?'todos':'atrasado';renderAnalisis()"><small>${ic('reloj')} Atrasados</small><b class="num" style="color:var(--alerta)">${nAtrasados}</b><em>Pasaron su frecuencia de compra</em></button>
+      <button type="button" class="kpi clic ${f.riesgo === 'perdido' ? 'sel' : ''}" onclick="UI.ana.riesgo=UI.ana.riesgo==='perdido'?'todos':'perdido';renderAnalisis()"><small>${ic('alerta')} Ya no compran</small><b class="num" style="color:var(--error)">${nPerdidos}</b><em>Más de ${V.ya_no_compra} días sin comprar</em></button>
       <div class="kpi var-kpi"><small>Variables</small>
         <label>Frecuencia esperada <input type="number" min="1" value="${V.frecuencia}" onchange="ANAV.set('frecuencia',this.value)"> días</label>
         <label>Ya no compra después de <input type="number" min="1" value="${V.ya_no_compra}" onchange="ANAV.set('ya_no_compra',this.value)"> días</label></div>
@@ -2591,20 +2611,20 @@ function renderAnalisis() {
     </div>
     <div style="margin-top:16px">
       <div class="card"><h3>${ic('estrella')} Mejores clientes</h3>
-        ${top.length ? `<table><thead><tr><th>Cliente</th><th>Nivel / tipo</th><th class="cen">Pedidos</th><th class="der">Gasto</th><th>Favorito</th></tr></thead><tbody>
-        ${top.map(([id, g, n]) => { const c = D.clientes.get(id); const e = C[id]; return `<tr class="clic" onclick="UI.ana.cliente='${id}';renderAnalisis();document.getElementById('ana-cli').scrollIntoView({behavior:'smooth'})"><td><b>${h(nombreCliente(c))}</b></td><td>${esEmpresa(c) ? `<span class="tag b2b">${h(c.tipo_negocio || 'Empresa')}</span>` : e ? tagNivel(e.nivel) : ''}</td><td class="cen">${n}</td><td class="der num">${soles(g)}</td><td>${e?.favorito ? nombreSabor(e.favorito) : '—'}</td></tr>`; }).join('')}
+        ${top.length ? `<table><thead><tr><th>Cliente</th><th>Nivel / tipo</th><th class="cen">Pedidos</th><th class="der">Gasto</th><th class="der">Ganancia</th><th>Favorito</th></tr></thead><tbody>
+        ${top.map(([id, g, n]) => { const c = D.clientes.get(id); const e = C[id]; return `<tr class="clic" onclick="UI.ana.cliente='${id}';renderAnalisis();document.getElementById('ana-cli').scrollIntoView({behavior:'smooth'})"><td><b>${h(nombreCliente(c))}</b></td><td>${esEmpresa(c) ? `<span class="tag b2b">${h(c.tipo_negocio || 'Empresa')}</span>` : e ? tagNivel(e.nivel) : ''}</td><td class="cen">${n}</td><td class="der num">${soles(g)}</td><td class="der num"><b class="${claseMargen(g ? (ganCli[id] || 0) / g * 100 : 0)}-txt">${soles(ganCli[id] || 0)}</b></td><td>${e?.favorito ? nombreSabor(e.favorito) : '—'}</td></tr>`; }).join('')}
         </tbody></table>` : '<p class="suave">Sin ventas en este periodo.</p>'}</div>
     </div>
     <div class="card" style="margin-top:16px"><div class="fila" style="margin-bottom:6px"><h3 style="margin:0">${ic('reloj')} Clientes que no están comprando <small class="suave">(${riesgo.length})</small></h3>
       <select style="width:auto;margin-left:auto" onchange="UI.ana.riesgo=this.value;renderAnalisis()">${[['todos', 'Atrasados y los que ya no compran'], ['atrasado', 'Solo atrasados'], ['perdido', 'Solo los que ya no compran']].map(([k, t]) => `<option value="${k}" ${f.riesgo === k ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
       <p class="suave" style="margin-top:0"><b>Atrasado</b>: pasó los días con los que suele comprar (o ${V.frecuencia} días si compró una sola vez). <b>Ya no compra</b>: más de ${V.ya_no_compra} días sin comprar. A los ${CLUB.dias_pausa} días, su nivel del Club queda en pausa.</p>
       ${riesgo.length ? `<div class="tabla-wrap"><table><thead><tr><th>Cliente</th><th>Nivel</th><th class="cen">Días sin comprar</th><th class="cen">Suele comprar cada</th><th class="cen">Atraso</th><th>Estado</th><th></th></tr></thead><tbody>
-      ${riesgo.slice(0, 25).map(([c, e, atraso]) => `<tr><td><a href="#" onclick="CLI.abrir('${c.id}');return false"><b>${h(nombreCliente(c))}</b></a><br><small>le gusta ${e.favorito ? nombreSabor(e.favorito) : '—'}</small></td>
+      ${riesgo.slice(0, 25).map(([c, e, atraso]) => `<tr><td><a href="#" onclick="CLI.abrir('${c.id}');return false"><b>${h(nombreCliente(c))}</b></a><br><small>Le gusta: ${e.favorito ? nombreSabor(e.favorito) : '—'}</small></td>
         <td>${esEmpresa(c) ? '<span class="tag b2b">Empresa</span>' : tagNivel(e.nivel)}</td>
         <td class="cen"><b style="color:${e.dias > CLUB.dias_pausa ? 'var(--error)' : 'var(--alerta)'}">${e.dias} d</b></td>
-        <td class="cen">${e.frecuencia ? `${e.frecuencia} d` : `<small>1 compra · se espera ${V.frecuencia} d</small>`}</td>
+        <td class="cen">${e.frecuencia ? `${e.frecuencia} d` : `<small>1 compra · Se espera ${V.frecuencia} d</small>`}</td>
         <td class="cen">${atraso > 0 ? `<b>+${atraso} d</b>` : '—'}</td>
-        <td>${estadoCompra(e) === 'perdido' ? '<span class="tag anulado">Ya no compra</span>' : '<span class="tag pendiente">Atrasado</span>'}${e.pausa ? ` <span class="tag pausa">${ic('pausa')} pausa</span>` : ''}</td>
+        <td>${estadoCompra(e) === 'perdido' ? '<span class="tag anulado">Ya no compra</span>' : '<span class="tag pendiente">Atrasado</span>'}${e.pausa ? ` <span class="tag pausa">${ic('pausa')} En pausa</span>` : ''}</td>
         <td class="der"><button class="btn mini wa" onclick="abrirWhatsApp('${h(c.celular)}', ${h(JSON.stringify(`¡Hola ${saludo(c)}! 🥜 Te extrañamos en Mr. Peanut. ¿Te preparamos tu ${e.favorito ? 'mantequilla de ' + nombreSabor(e.favorito) : 'pedido'} de siempre?${esEmpresa(c) ? '' : ` Llevas ${plural(e.total, 'sello')} en tu tarjeta.`}`))})">${ic('wa')} Escribirle</button></td></tr>`).join('')}
       </tbody></table></div>` : '<p class="suave">Todos están comprando a su ritmo.</p>'}
     </div>
@@ -2665,7 +2685,7 @@ const VARIABLES_CLUB = [
   ['desc_referido', 'Descuento al amigo referido (S/)', 'Se aplica en el primer pack del amigo.'],
   ['dias_pausa', 'Días sin comprar para pausa', 'Pasado este tiempo, su siguiente pedido se cobra a precio oficial.'],
   ['tope_leyenda_semana', 'Tope de packs Leyenda por semana', 'Solo avisa; no bloquea.'],
-  ['resenas_mes', 'Historias/reseñas que suman sello por mes', '0 = sin límite.'],
+  ['historias_pedido', 'Historias/reseñas que suman sello por pedido', 'Cada historia suma 1 sello, hasta este número por cada pedido. 0 = sin límite.'],
 ];
 
 function renderClub() {
@@ -2717,11 +2737,11 @@ function renderClub() {
     const historias = lista('sellos_extra').filter(s => s.tipo === 'resena').sort((a, b) => b.fecha.localeCompare(a.fecha)).slice(0, 15);
     cuerpo = `
     <div class="card" style="margin-bottom:16px"><h3>${ic('camara')} Registrar historia o reseña</h3>
-      <p class="suave" style="margin-top:-6px">Cuando un cliente sube una historia o reseña hablando del producto, la registras aquí y se le suma 1 sello${CLUB.resenas_mes ? ` (máximo ${CLUB.resenas_mes} por mes)` : ''}.</p>
-      <div class="grid g3" style="align-items:end">
-        <div class="campo"><label>Cliente</label><select id="hs-cli" onchange="CLUBV.pedidos()"><option value="">Elige…</option>${[...cs].sort((a, b) => nombreCliente(a).localeCompare(nombreCliente(b))).map(c => `<option value="${c.id}">${h(nombreCliente(c))} · ${h(c.celular)}</option>`).join('')}</select></div>
+      <p class="suave" style="margin-top:-6px">Cuando un cliente sube una historia o reseña hablando del producto, la registras aquí y se le suma 1 sello por cada una${CLUB.historias_pedido ? ` (máximo ${CLUB.historias_pedido} por pedido)` : ''}.</p>
+      <div class="grid g3" style="align-items:start">
+        <div class="campo"><label>Cliente</label><input type="hidden" id="hs-cli" value=""><div id="hs-cli-caja"></div></div>
         <div class="campo"><label>Dónde la publicó</label><select id="hs-red">${Object.entries(REDES).map(([k, t]) => `<option value="${k}">${t}</option>`).join('')}</select></div>
-        <div class="campo"><label>Pedido <small class="suave">(opcional)</small></label><select id="hs-ped"><option value="">— elige un cliente —</option></select></div>
+        <div class="campo"><label>Pedido <small class="suave">(opcional)</small></label><select id="hs-ped"><option value="">Primero elige el cliente</option></select></div>
       </div>
       <div class="fila" style="margin-top:10px"><button class="btn prim" onclick="CLUBV.registrar()">Sumar +1 sello</button><span id="hs-msg"></span></div>
     </div>
@@ -2733,27 +2753,43 @@ function renderClub() {
     cuerpo = `
     <div class="card" style="max-width:900px"><h3>Variables del Club</h3>
       <table><tbody>${VARIABLES_CLUB.map(([k, t, d]) => `<tr><td><b>${t}</b><br><small class="suave">${d}</small></td><td style="width:110px"><input type="number" min="0" value="${CLUB[k]}" onchange="CLUBV.set('${k}',this.value)"></td></tr>`).join('')}</tbody></table>
-      <p class="suave">Reglas fijas: un pedido B2C con pack, <b>pagado y entregado</b>, suma 1 sello (los frascos sueltos y los pedidos B2B no suman). El amigo referido da +1 sello cuando su primer pack queda pagado y entregado. El nivel se puede fijar a mano en la ficha del cliente. Los precios por nivel se cambian en <a href="#" onclick="ir('productos');return false">Productos y promociones</a>.</p>
+      <p class="suave">Reglas fijas: todo pedido B2C (pack, frascos sueltos o productos), <b>pagado y entregado</b>, suma 1 sello (los pedidos B2B y los canjes no suman). El amigo referido da +1 sello cuando su primer pack queda pagado y entregado. El nivel se puede fijar a mano en la ficha del cliente. Los precios por nivel se cambian en <a href="#" onclick="ir('productos');return false">Productos y promociones</a>.</p>
       <button class="btn mini" onclick="CLUBV.reset()">Volver a las variables originales</button>
     </div>`;
   }
   $('#v-club').innerHTML = `
-    <div class="cab-vista"><div><h2>Club Mr. Peanut</h2><span class="suave">1 pedido con pack, pagado y entregado = 1 sello · VIP desde ${CLUB.vip_sellos} · Leyenda desde ${CLUB.leyenda_sellos} · regalo cada ${CLUB.regalo_cada} sellos.</span></div></div>
+    <div class="cab-vista"><div><h2>Club Mr. Peanut</h2><span class="suave">1 pedido pagado y entregado = 1 sello · VIP desde ${CLUB.vip_sellos} · Leyenda desde ${CLUB.leyenda_sellos} · regalo cada ${CLUB.regalo_cada} sellos.</span></div></div>
     <div class="subtabs" role="tablist">${tabs.map(([k, i, t]) => `<button role="tab" class="${sub === k ? 'activo' : ''}" aria-selected="${sub === k}" onclick="UI.club='${k}';recordarVista();renderClub()">${ic(i)} ${t}</button>`).join('')}</div>
     ${cuerpo}`;
+  if (sub === 'actividad') CLUBV.pintarCliente();
 }
 const CLUBV = {
+  // Buscador de cliente (igual que en Nuevo pedido): se escribe nombre, celular o código y aparecen coincidencias.
+  pintarCliente(cid = '', q = '') {
+    const caja = $('#hs-cli-caja'); if (!caja) return;
+    $('#hs-cli').value = cid; const c = cid && D.clientes.get(cid);
+    caja.innerHTML = c
+      ? `<div class="cli-elegido"><div><b>${h(nombreCliente(c))}</b><br><small class="suave">${h(c.celular)}${c.codigo ? ' · ' + h(c.codigo) : ''}</small></div><button class="btn mini" onclick="CLUBV.pintarCliente();setTimeout(()=>$('#hs-q')?.focus(),30)">Cambiar</button></div>`
+      : `<input type="search" id="hs-q" placeholder="Escribe nombre, celular o código" value="${h(q)}" oninput="CLUBV.buscar(this.value)" autocomplete="off"><div id="hs-sug"></div>`;
+    CLUBV.pedidos();
+  },
+  buscar(q) {
+    const res = buscarClientes(q, 8, 'persona'); const C = club();
+    $('#hs-sug').innerHTML = q.trim() ? `<div class="sugerencias">${res.length
+      ? res.map(c => `<button onclick="CLUBV.pintarCliente('${c.id}')"><b>${h(nombreCliente(c))}</b> <small>${h(c.celular)}${c.distrito ? ' · ' + h(c.distrito) : ''}</small> <span style="margin-left:auto">${tagNivel(C[c.id].nivel)}</span></button>`).join('')
+      : '<div style="padding:10px" class="suave">No hay clientes con ese nombre, celular o código.</div>'}</div>` : '';
+  },
   pedidos() {
-    const cid = $('#hs-cli').value; const sel = $('#hs-ped');
+    const cid = $('#hs-cli').value; const sel = $('#hs-ped'); if (!sel) return;
     const ps = cid ? pedidosParaResena(cid) : [];
-    sel.innerHTML = cid ? opcionesPedResena(ps) : '<option value="">— elige un cliente —</option>';
+    sel.innerHTML = cid ? opcionesPedResena(ps) : '<option value="">Primero elige el cliente</option>';
   },
   async registrar() {
-    const cid = $('#hs-cli').value; if (!cid) return toast('Elige el cliente.');
+    const cid = $('#hs-cli').value; if (!cid) { toast('Busca y elige al cliente.'); $('#hs-q')?.focus(); return; }
     const link = '';
     const err = await registrarResena(cid, { red: $('#hs-red').value, pedido_id: $('#hs-ped').value || null, link: /^https?:/.test(link) ? link : '', nota: /^https?:/.test(link) ? '' : link });
     if (err) { $('#hs-msg').innerHTML = `<span class="aviso alerta">${h(err)}</span>`; return; }
-    renderClub();
+    renderClub(); CLUBV.pintarCliente(cid);
   },
   async set(k, v) { CLUB[k] = Math.max(0, +v || 0); CFG.club = { ...CLUB }; await guardarConfig(); invalidar(); renderClub(); toast('Variable actualizada.'); },
   async reset() { if (!confirm('¿Volver a las variables originales del Club?')) return; CLUB = { ...CLUB_BASE }; CFG.club = null; await guardarConfig(); invalidar(); renderClub(); },
@@ -2803,7 +2839,7 @@ function renderProductos() {
       <div class="card">
         <p style="margin-top:0"><b>Link del catálogo (fuente de datos programada)</b></p>
         ${feed ? `<div class="fila"><span class="codigo" style="flex:1">${h(feed)}</span><button class="btn mini" onclick="copiar('${h(feed)}')">Copiar</button><a class="btn mini" href="${h(feed)}" target="_blank" rel="noopener">Probar</a></div>`
-          : `<div class="aviso alerta">Aparece aquí cuando conectes Supabase en <a href="#" onclick="ir('ajustes');return false">Sincronización</a>. Mientras tanto puedes subir el CSV a mano.</div>`}
+          : `<div class="aviso alerta">Aparece aquí cuando conectes Supabase en <a href="#" onclick="ir('ajustes');return false">Configuración</a>. Mientras tanto puedes subir el CSV a mano.</div>`}
         <ol style="padding-left:20px;margin-bottom:0">
           <li>Meta Business Suite → <b>Commerce Manager</b> → tu catálogo → <b>Orígenes de datos</b>.</li>
           <li><b>Agregar artículos → Fuente de datos → Programada</b> y pega el link.</li>
@@ -3216,7 +3252,7 @@ async function token() {
   const s = CFG.supabase;
   if (s.access_token && s.expires_at && s.expires_at * 1000 > Date.now() + 60000) return s.access_token;
   const r = await fetch(`${s.url}/auth/v1/token?grant_type=refresh_token`, { method: 'POST', headers: { apikey: s.anon, 'Content-Type': 'application/json' }, body: JSON.stringify({ refresh_token: s.refresh_token }) });
-  if (!r.ok) throw new Error('La sesión de Supabase venció. Vuelve a conectar en Sincronización.');
+  if (!r.ok) throw new Error('La sesión de Supabase venció. Vuelve a conectar en Configuración.');
   const j = await r.json();
   Object.assign(s, { access_token: j.access_token, refresh_token: j.refresh_token, expires_at: j.expires_at });
   await guardarConfig();
@@ -3521,7 +3557,7 @@ function renderAjustes() {
     </div>`;
   }
   $('#v-ajustes').innerHTML = `
-    <div class="cab-vista"><div><h2>Sincronización y ajustes</h2><span class="suave">Todo se guarda primero en esta computadora y se respalda solo en Supabase.</span></div></div>
+    <div class="cab-vista"><div><h2>Configuración</h2><span class="suave">Sincronización con Supabase, WhatsApp, datos del negocio y respaldos. Todo se guarda primero en esta computadora y se respalda solo en Supabase.</span></div></div>
     <div class="subtabs" role="tablist">${tabs.map(([k, i, t]) => `<button role="tab" class="${sub === k ? 'activo' : ''}" aria-selected="${sub === k}" onclick="UI.ajustes='${k}';recordarVista();renderAjustes()">${ic(i)} ${t}</button>`).join('')}</div>
     ${cuerpo}`;
   ESC.pintar();
